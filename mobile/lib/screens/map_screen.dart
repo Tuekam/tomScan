@@ -1,5 +1,4 @@
 // screens/map_screen.dart
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -8,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 
 class MapScreen extends StatefulWidget {
   final double? initialLatitude;
@@ -38,7 +38,7 @@ class _MapScreenState extends State<MapScreen>
   late MapController _mapController;
   final List<Marker> _zoneMarkers = [];
   List<ZoneData> _zones = [];
-  bool _isLoadingData = true; // Chargement des données en arrière-plan
+  bool _isLoadingData = true;
   bool _isLoadingLocation = true;
   String? _errorMessage;
 
@@ -58,15 +58,11 @@ class _MapScreenState extends State<MapScreen>
   List<Marker> _parcelMarkers = [];
   final List<Map<String, dynamic>> _userParcels = [];
 
-  // Centre par défaut (Douala)
   static const LatLng _defaultCenter = LatLng(4.051070, 9.767880);
-
-  // State initialization for center/zoom moved to initState
 
   @override
   void initState() {
     super.initState();
-    // Initialize map center and zoom from widget parameters (or defaults)
     _initialCenter =
         (widget.initialLatitude != null && widget.initialLongitude != null)
             ? LatLng(widget.initialLatitude!, widget.initialLongitude!)
@@ -78,7 +74,6 @@ class _MapScreenState extends State<MapScreen>
       vsync: this,
     );
 
-    // Afficher la carte immédiatement, charger les données en arrière-plan
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPermissionsAndLoad();
     });
@@ -93,8 +88,11 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _loadUserParcels() async {
     try {
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.get(
-        'http://192.168.0.176:8000/api/parcelles?id_utilisateur=1',
+        '${AppConfig.baseUrl}/parcelles?id_utilisateur=1',
       );
 
       if (response.statusCode == 200) {
@@ -196,7 +194,6 @@ class _MapScreenState extends State<MapScreen>
   }
 
   Future<void> _checkPermissionsAndLoad() async {
-    // D'abord la localisation
     final status = await Permission.location.request();
     if (status.isGranted) {
       await _getUserLocation();
@@ -207,7 +204,6 @@ class _MapScreenState extends State<MapScreen>
       });
     }
 
-    // Puis charger les zones et parcelles (sans bloquer l'affichage)
     await Future.wait([
       _loadZones(),
       _loadUserParcels(),
@@ -263,7 +259,6 @@ class _MapScreenState extends State<MapScreen>
         _isLoadingLocation = false;
       });
 
-      // Si pas de paramètres initiaux, centrer sur l'utilisateur
       if (widget.initialLatitude == null) {
         _mapController.move(userLatLng, 18);
       }
@@ -277,7 +272,10 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _loadZones() async {
     try {
-      final response = await _dio.get('http://192.168.0.176:8000/api/zones');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      final response = await _dio.get('${AppConfig.baseUrl}/zones');
 
       if (response.statusCode == 200) {
         final data = response.data;
@@ -336,7 +334,6 @@ class _MapScreenState extends State<MapScreen>
           _zoneMarkers.addAll(markers);
         });
 
-        // Centrer sur le point mis en évidence si nécessaire
         if (widget.initialLatitude != null && widget.initialLongitude != null) {
           Future.delayed(const Duration(milliseconds: 500), () {
             _mapController.move(
@@ -488,8 +485,11 @@ class _MapScreenState extends State<MapScreen>
       final pointsForApi =
           _parcelPoints.map((p) => [p.latitude, p.longitude]).toList();
 
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.post(
-        'http://192.168.0.176:8000/api/parcelles',
+        '${AppConfig.baseUrl}/parcelles',
         data: {'nom': parcelName, 'points': pointsForApi, 'id_utilisateur': 1},
       );
 
@@ -566,7 +566,10 @@ class _MapScreenState extends State<MapScreen>
     if (confirm != true) return;
 
     try {
-      await _dio.delete('http://192.168.0.176:8000/api/parcelles/$id');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      await _dio.delete('${AppConfig.baseUrl}/parcelles/$id');
       await _loadUserParcels();
       await _loadZones();
       if (mounted) {
@@ -736,7 +739,6 @@ class _MapScreenState extends State<MapScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Rassembler tous les marqueurs
     final allMarkers = <Marker>[
       ..._zoneMarkers,
       if (_userMarker != null) _userMarker!,
@@ -744,7 +746,6 @@ class _MapScreenState extends State<MapScreen>
     ];
     if (_highlightMarker != null) allMarkers.add(_highlightMarker!);
 
-    // Polygones
     final polygons = <Polygon>[
       ..._parcelPolygons,
       if (_isDrawingParcel && _parcelPoints.isNotEmpty)
@@ -757,7 +758,6 @@ class _MapScreenState extends State<MapScreen>
         ),
     ];
 
-    // Marqueurs temporaires pour le dessin
     final drawingMarkers = _isDrawingParcel
         ? _parcelPoints
             .asMap()
@@ -823,7 +823,6 @@ class _MapScreenState extends State<MapScreen>
       ),
       body: Stack(
         children: [
-          // Carte affichée immédiatement
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -846,8 +845,6 @@ class _MapScreenState extends State<MapScreen>
               MarkerLayer(markers: [...allMarkers, ...drawingMarkers]),
             ],
           ),
-
-          // Indicateur de chargement des données (si nécessaire)
           if (_isLoadingData)
             const Positioned(
               top: 16,
@@ -871,8 +868,6 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ),
-
-          // Barre d'outils de dessin
           if (_isDrawingParcel)
             Positioned(
               bottom: 20,
@@ -939,8 +934,6 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ),
-
-          // Indicateur de mode dessin
           if (_isDrawingParcel)
             Positioned(
               top: 16,
@@ -963,8 +956,6 @@ class _MapScreenState extends State<MapScreen>
                 ),
               ),
             ),
-
-          // Légende flottante
           Positioned(
             top: 16,
             right: 16,
@@ -1033,8 +1024,6 @@ class _MapScreenState extends State<MapScreen>
               ),
             ),
           ),
-
-          // Type de carte
           Positioned(
             bottom: 16,
             right: 16,

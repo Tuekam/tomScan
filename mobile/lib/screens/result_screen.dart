@@ -2,6 +2,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 
 class ResultScreen extends StatelessWidget {
   final String imagePath;
@@ -31,7 +32,6 @@ class ResultScreen extends StatelessWidget {
     required this.niveauGravite,
   });
 
-  // Couleur selon le niveau de gravité
   Color _getGraviteColor(String niveau) {
     switch (niveau) {
       case 'ELEVE':
@@ -45,12 +45,10 @@ class ResultScreen extends StatelessWidget {
     }
   }
 
-  // Formatage du nom de la maladie pour affichage
   String _getFormattedMaladieName(String name) {
     return name.replaceAll('_', ' ').replaceAll('Tomato ', '');
   }
 
-  // Dossier des images de référence en fonction de la maladie
   String _getReferenceFolder() {
     final lower = maladie.toLowerCase();
     if (lower.contains('early')) return 'early_blight';
@@ -62,7 +60,6 @@ class ResultScreen extends StatelessWidget {
     return '';
   }
 
-  // Liste des chemins d'accès aux 10 images de référence (assets)
   List<String> _getReferenceImages() {
     final folder = _getReferenceFolder();
     if (folder.isEmpty) return [];
@@ -70,7 +67,6 @@ class ResultScreen extends StatelessWidget {
         10, (i) => 'assets/images/references/$folder/img${i + 1}.jpg');
   }
 
-  // Vérifie si une image locale existe (pour le dernier diagnostic)
   bool _hasLocalImage() {
     if (imagePath.isEmpty) return false;
     try {
@@ -80,11 +76,13 @@ class ResultScreen extends StatelessWidget {
     }
   }
 
-  // Construit l'URL distante (pour l'historique)
+  // ============================================================
+  // URL centralisée pour les images
+  // ============================================================
   String _getRemoteImageUrl() {
     if (imagePath.isEmpty) return '';
     final fileName = imagePath.split('/').last;
-    return 'http://192.168.0.176:8000/api/images/$fileName';
+    return '${AppConfig.baseUrlImages}/$fileName';
   }
 
   @override

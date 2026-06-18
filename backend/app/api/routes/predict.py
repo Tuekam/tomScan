@@ -2,7 +2,6 @@
 from fastapi import APIRouter, UploadFile, File, Form
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
-from fastapi import UploadFile
 import os
 import uuid
 import cv2
@@ -25,14 +24,15 @@ obs_repo = ObservationRepository()
 maladie_repo = MaladieRepository()
 zone_repo = ZoneRepository()
 
-# Chargement du modèle YOLO
-YOLO_MODEL_PATH = "ml/yolo_plante_tomate.pt"
-SEUIL_CONFIANCE_YOLO = 0.8
-yolo_model = YOLO(YOLO_MODEL_PATH)
+# Chargement du modèle YOLO (utilise settings.YOLO_MODEL_PATH)
+yolo_model = YOLO(settings.YOLO_MODEL_PATH)
 
-# Règles métier
-RAYON_GROUPEMENT_M = 1.0
-SEUIL_CREATION_ZONE = 10
+# Règles métier depuis settings
+RAYON_GROUPEMENT_M = settings.RAYON_GROUPEMENT_M
+SEUIL_CREATION_ZONE = settings.SEUIL_CREATION_ZONE
+RAYON_RECHERCHE_ZONE = settings.RAYON_RECHERCHE_ZONE
+SEUIL_CONFIANCE_YOLO = settings.SEUIL_CONFIANCE_YOLO
+UPLOAD_DIR = settings.UPLOAD_DIR
 
 def distance_en_mètres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Formule de Haversine"""
@@ -94,17 +94,16 @@ async def predict(
     # 1. Lecture de l'image
     image_bytes = await image.read()
 
-    # Sauvegarde de l'image sur disque
-    upload_dir = "uploads"
-    os.makedirs(upload_dir, exist_ok=True)
+    # Sauvegarde de l'image sur disque (utilise settings.UPLOAD_DIR)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
     extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
     image_filename = f"{uuid.uuid4()}.{extension}"
-    image_path = os.path.join(upload_dir, image_filename)
+    image_path = os.path.join(UPLOAD_DIR, image_filename)
 
     with open(image_path, "wb") as f:
         f.write(image_bytes)
     
-    # 2. Vérification YOLO
+    # 2. Vérification YOLO (utilise SEUIL_CONFIANCE_YOLO)
     if not await contient_plante(image_bytes):
         return {
             "maladie": "Non identifiable",
@@ -156,10 +155,10 @@ async def predict(
             print(f"⚠️ Observation #{id_observation} hors parcelle")
 
     # ============================================================
-    # NOUVELLE LOGIQUE DE REGROUPEMENT (CORRIGÉE)
+    # REGROUPEMENT (utilise RAYON_GROUPEMENT_M et SEUIL_CREATION_ZONE)
     # ============================================================
     
-    # 9. Trouver les observations proches de la nouvelle observation (rayon 1 mètre)
+    # 9. Trouver les observations proches de la nouvelle observation
     observations_proches = await obs_repo.get_observations_proches(
         latitude, longitude, RAYON_GROUPEMENT_M, exclude_id=id_observation
     )
@@ -192,15 +191,13 @@ async def predict(
             id_parcelle_associee = None
             zone_type = "HORS_PARCELLE"
         
-        # Vérifier si une zone existe déjà à proximité (rayon 1 mètre)
+        # Vérifier si une zone existe déjà à proximité (utilise RAYON_RECHERCHE_ZONE)
         id_existant = await zone_repo.zone_existe_proche(
-            centre_lat, centre_lon, RAYON_GROUPEMENT_M
+            centre_lat, centre_lon, RAYON_RECHERCHE_ZONE
         )
         
         if id_existant:
-            # Mettre à jour la zone existante avec le NOUVEAU centre
-            # On ne fait que mettre à jour le centre et le type
-            # Le nombre d'observations sera recalculé depuis la base
+            # Mettre à jour la zone existante
             zone_actuelle = await zone_repo.get_zone_by_id(id_existant)
             if zone_actuelle:
                 nouveau_total = zone_actuelle["nombre_observations"] + 1

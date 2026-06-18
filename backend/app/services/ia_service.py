@@ -1,3 +1,4 @@
+# backend/app/services/ia_service.py
 import torch
 import torch.nn as nn
 from torchvision import models
@@ -5,19 +6,20 @@ from PIL import Image
 import io
 from ml.class_names import CLASS_NAMES
 from ml.transforms import get_transform
+from app.core.config import settings
 
 class IAService:
     def __init__(self, model_path: str):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.class_names = CLASS_NAMES  # ← Défini AVANT d'appeler _load_model
+        self.class_names = CLASS_NAMES
         self.transform = get_transform()
-        self.seuil = 50.0
+        self.seuil = settings.SEUIL_CONFIANCE_RESNET  # ← Centralisé
         self.model = self._load_model(model_path)
 
     def _load_model(self, model_path: str):
         model = models.resnet18(pretrained=False)
         num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, len(self.class_names))  # ← maintenant self.class_names existe
+        model.fc = nn.Linear(num_ftrs, len(self.class_names))
         model.load_state_dict(torch.load(model_path, map_location=self.device))
         model = model.to(self.device)
         model.eval()

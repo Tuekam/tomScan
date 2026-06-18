@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 
 class ChatbotScreen extends StatefulWidget {
   final String? initialQuestion;
@@ -22,8 +23,6 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isSending = false;
   bool _isInitializing = true;
-
-  final String _baseUrl = 'http://192.168.0.176:8000/api';
 
   @override
   void initState() {
@@ -46,7 +45,11 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
   Future<void> _loadConversations() async {
     try {
-      final response = await _dio.get('$_baseUrl/conversations?user_id=1');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      final response =
+          await _dio.get('${AppConfig.baseUrl}/conversations?user_id=1');
       if (response.statusCode == 200) {
         final data = response.data as List;
         setState(() {
@@ -72,7 +75,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     if (sujet == null) return;
     try {
       final response = await _dio.post(
-        '$_baseUrl/conversations?user_id=1',
+        '${AppConfig.baseUrl}/conversations?user_id=1',
         data: {'sujet': sujet},
       );
       if (response.statusCode == 200) {
@@ -170,8 +173,8 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
       _isSending = false;
     });
     try {
-      final response =
-          await _dio.get('$_baseUrl/conversations/${conv.id}/messages');
+      final response = await _dio
+          .get('${AppConfig.baseUrl}/conversations/${conv.id}/messages');
       if (response.statusCode == 200) {
         final data = response.data as List;
         setState(() {
@@ -218,7 +221,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
     try {
       final response = await _dio.post(
-        '$_baseUrl/conversations/${_selectedConversation!.id}/messages',
+        '${AppConfig.baseUrl}/conversations/${_selectedConversation!.id}/messages',
         data: {'question': question},
       );
       if (response.statusCode == 200) {

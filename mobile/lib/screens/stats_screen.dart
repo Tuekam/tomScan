@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 import 'map_screen.dart';
 
 class StatsScreen extends StatefulWidget {
@@ -46,9 +47,12 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _loadFilters() async {
     try {
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final [parcellesRes, maladiesRes] = await Future.wait([
-        _dio.get('http://192.168.0.176:8000/api/parcelles?id_utilisateur=1'),
-        _dio.get('http://192.168.0.176:8000/api/maladies'),
+        _dio.get('${AppConfig.baseUrl}/parcelles?id_utilisateur=1'),
+        _dio.get('${AppConfig.baseUrl}/maladies'),
       ]);
 
       setState(() {
@@ -74,8 +78,11 @@ class _StatsScreenState extends State<StatsScreen> {
         if (_selectedMaladie != null) 'maladie': _selectedMaladie,
       };
 
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.get(
-        'http://192.168.0.176:8000/api/stats',
+        '${AppConfig.baseUrl}/stats',
         queryParameters: queryParams,
       );
 
@@ -110,8 +117,11 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _showZoneDetail(Map<String, dynamic> zone) async {
     try {
-      final response = await _dio
-          .get('http://192.168.0.176:8000/api/stats/zone/${zone['id_zone']}');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      final response =
+          await _dio.get('${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}');
 
       if (response.statusCode == 200 && mounted) {
         final detail = response.data;
@@ -134,8 +144,11 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _showParcelleDetail(Map<String, dynamic> parcelle) async {
     try {
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.get(
-          'http://192.168.0.176:8000/api/parcelles/${parcelle['id_parcelle']}/stats');
+          '${AppConfig.baseUrl}/parcelles/${parcelle['id_parcelle']}/stats');
 
       if (response.statusCode == 200 && mounted) {
         final detail = response.data;
@@ -153,7 +166,6 @@ class _StatsScreenState extends State<StatsScreen> {
     final maladies = List<Map<String, dynamic>>.from(detail['maladies'] ?? []);
     final total = detail['total_observations'] ?? 0;
 
-    // Vérifier si on a des données
     if (maladies.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -163,7 +175,6 @@ class _StatsScreenState extends State<StatsScreen> {
       return;
     }
 
-    // Calcul du taux d'infection
     int totalMalades = 0;
     for (var m in maladies) {
       if (m['nom'] != 'Sain') {
@@ -502,7 +513,6 @@ class _StatsScreenState extends State<StatsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 4 cartes KPI
                       Row(
                         children: [
                           _buildStatCard(Icons.photo_camera, 'Diagnostics',
@@ -519,8 +529,6 @@ class _StatsScreenState extends State<StatsScreen> {
                         ],
                       ),
                       const SizedBox(height: 20),
-
-                      // Filtres
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white,
@@ -566,8 +574,6 @@ class _StatsScreenState extends State<StatsScreen> {
                         ),
                       ),
                       const SizedBox(height: 20),
-
-                      // Répartition des maladies
                       if (_repartition.isNotEmpty)
                         Container(
                           decoration: BoxDecoration(
@@ -634,8 +640,6 @@ class _StatsScreenState extends State<StatsScreen> {
                           ),
                         ),
                       const SizedBox(height: 20),
-
-                      // Top zones
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white,
@@ -680,8 +684,6 @@ class _StatsScreenState extends State<StatsScreen> {
                         ),
                       ),
                       const SizedBox(height: 20),
-
-                      // Top parcelles
                       Container(
                         decoration: BoxDecoration(
                           color: Colors.white,

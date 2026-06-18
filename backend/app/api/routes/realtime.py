@@ -24,14 +24,12 @@ obs_repo = ObservationRepository()
 maladie_repo = MaladieRepository()
 zone_repo = ZoneRepository()
 
-# YOLO pour les bounding boxes
-YOLO_MODEL_PATH = "ml/yolo_plante_tomate.pt"
-SEUIL_CONFIANCE_YOLO = 0.8
-yolo_model = YOLO(YOLO_MODEL_PATH)
+# YOLO pour les bounding boxes (utilise settings)
+yolo_model = YOLO(settings.YOLO_MODEL_PATH)
 
 # Stockage des sessions
 sessions = {}
-TIMEOUT_SECONDS = 900  # 15 minutes
+TIMEOUT_SECONDS = settings.TIMEOUT_SESSION_SECONDS
 
 def get_bbox_color(maladie: str) -> str:
     """Couleur associée à la maladie pour les bounding boxes"""
@@ -70,14 +68,11 @@ async def process_frame(
     current_time = datetime.now().timestamp()
     image_bytes = await image.read()
     
-    # ============================================================
-    # LOG : Afficher les coordonnées GPS reçues
-    # ============================================================
     print(f"📍 FRAME #{session.total_frames + 1} -> Lat: {latitude:.6f}, Lon: {longitude:.6f}, Précision: {precision_gps:.1f}m")
     
-    # Vérifier si la frame doit être analysée
+    # Vérifier si la frame doit être analysée (utilise settings pour qualite_min)
     doit_analyser, raison = session.doit_analyser_frame(
-        latitude, longitude, current_time, image_bytes
+        latitude, longitude, current_time, image_bytes, precision_gps, settings.QUALITE_IMAGE_MIN
     )
     
     if not doit_analyser:
@@ -88,29 +83,41 @@ async def process_frame(
             "message": "Frame ignorée"
         }
     
-    # --- Analyse avec YOLO pour les bounding boxes ---
+    # --- Analyse avec YOLO ---
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
-        # Détection des plantes avec YOLO
         results = yolo_model(img, verbose=False)
         detections = []
         
         for r in results:
             if r.boxes is not None:
                 for box in r.boxes:
-                    if box.conf.item() >= SEUIL_CONFIANCE_YOLO:
+                    if box.conf.item() >= settings.SEUIL_CONFIANCE_YOLO:
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
                         w = x2 - x1
                         h = y2 - y1
                         
-                        # Découper la région pour ResNet
+                        # Filtres : ignorer les détections trop petites ou trop grandes
+                        if w < 30 or h < 30:
+                            continue
+                        if w > img.shape[1] * 0.8 or h > img.shape[0] * 0.8:
+                            continue
+                        
+                        # Rapport d'aspect d'une feuille de tomate (~0.5 à 1.8)
+                        aspect_ratio = w / h
+                        if aspect_ratio < 0.3 or aspect_ratio > 2.5:
+                            continue
+                        
                         plant_img = img[int(y1):int(y2), int(x1):int(x2)]
                         _, plant_bytes = cv2.imencode('.jpg', plant_img)
                         
-                        # Classifier avec ResNet
                         maladie, confiance = await ia_service.classifier(plant_bytes.tobytes())
+                        
+                        # Ignorer si ResNet retourne "Non identifiable" ou confiance trop faible
+                        if maladie == "Non identifiable" or confiance < 30.0:
+                            continue
                         
                         detections.append({
                             "maladie": maladie,
@@ -122,7 +129,6 @@ async def process_frame(
                             "bbox_color": get_bbox_color(maladie)
                         })
         
-        # Si au moins une plante détectée
         if detections:
             detection_principale = detections[0]
             maladie = detection_principale["maladie"]
@@ -130,7 +136,6 @@ async def process_frame(
             
             print(f"   ✅ ANALYSÉE: {maladie} ({confiance:.1f}%)")
             
-            # Sauvegarder en base
             id_diagnostic = await diag_repo.save_diagnostic(1, "TEMPS_REEL", None)
             id_maladie = await maladie_repo.get_id_by_nom(maladie)
             now = datetime.now()
@@ -148,7 +153,6 @@ async def process_frame(
                 id_parcelle=None
             )
             
-            # Ajouter à la session
             session.ajouter_analyse(
                 latitude, longitude, maladie, confiance,
                 id_observation, id_diagnostic
@@ -193,7 +197,6 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
     print(f"   📷 Ignorées (qualité): {resume['frames_ignored_quality']}")
     print(f"   📍 Ignorées (doublon GPS): {resume['frames_ignored_gps']}")
     
-    # Créer les zones finales
     zones_crees = []
     for zone_data in resume["zones"]:
         id_zone = await zone_repo.creer_zone(
@@ -209,7 +212,6 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
             "maladies": zone_data["maladies"]
         })
     
-    # Sauvegarder la session en base
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         table_exists = await conn.fetchval("""
@@ -240,7 +242,6 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
     finally:
         await conn.close()
     
-    # Supprimer la session
     del sessions[session_id]
     
     return {

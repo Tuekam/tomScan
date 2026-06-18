@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 import 'result_screen.dart';
 import 'realtime_result_screen.dart';
 import 'map_screen.dart';
@@ -35,7 +36,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   Future<void> _loadMaladies() async {
     try {
-      final response = await _dio.get('http://192.168.0.176:8000/api/maladies');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      final response = await _dio.get('${AppConfig.baseUrl}/maladies');
       if (response.statusCode == 200) {
         setState(() {
           _maladies = List<Map<String, dynamic>>.from(response.data);
@@ -75,8 +79,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       print('🔍 Filtres appliqués: $queryParams');
 
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.get(
-        'http://192.168.0.176:8000/api/history',
+        '${AppConfig.baseUrl}/history',
         queryParameters: queryParams,
       );
 
@@ -112,7 +119,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             Text(
               'Confirmer la suppression',
               style: TextStyle(
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: FontWeight.w600,
                 color: AppTheme.textDark,
               ),
@@ -161,7 +168,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final endpoint = item['type'] == 'photo'
           ? '/api/diagnostics/${item['id']}'
           : '/api/sessions/${item['id']}';
-      await _dio.delete('http://192.168.0.176:8000$endpoint');
+      // ============================================================
+      // URL centralisée
+      // ============================================================
+      await _dio.delete('${AppConfig.baseUrl}$endpoint');
       setState(() {
         _items.removeWhere((e) => e['id'] == item['id']);
       });
@@ -721,7 +731,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 maxLines: 1,
               ),
               const SizedBox(height: 6),
-              // Chips en Wrap pour éviter le débordement
               Wrap(
                 spacing: 6,
                 runSpacing: 4,

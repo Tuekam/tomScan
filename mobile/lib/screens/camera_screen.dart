@@ -8,10 +8,11 @@ import 'package:dio/dio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
+import '../config.dart'; // ← AJOUT
 import 'result_screen.dart';
 import 'map_screen.dart';
 import 'realtime_scan_screen.dart';
-import 'chatbot_screen.dart'; // ← AJOUTER CET IMPORT
+import 'chatbot_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -155,8 +156,11 @@ class _CameraScreenState extends State<CameraScreen> {
         'precision_gps': position?.accuracy ?? 5.0,
       });
 
+      // ============================================================
+      // URL centralisée
+      // ============================================================
       final response = await _dio.post(
-        'http://192.168.0.176:8000/api/predict',
+        '${AppConfig.baseUrl}/predict',
         data: formData,
       );
 
@@ -219,7 +223,6 @@ class _CameraScreenState extends State<CameraScreen> {
       // Traitement du retour (bouton "Voir sur la carte" ou "Poser une question")
       if (result != null && mounted) {
         if (result['action'] == 'view_on_map') {
-          // Naviguer vers la carte avec les coordonnées
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -233,7 +236,6 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           );
         } else if (result['action'] == 'ask_chatbot') {
-          // Naviguer vers ChatbotScreen avec question pré-remplie
           final question = result['question'] ?? '';
           Navigator.push(
             context,
@@ -266,7 +268,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
     final data = _lastDiagnosticData!;
 
-    // Utiliser Navigator.push et attendre le résultat (comme dans _analyzeImage)
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -286,7 +287,6 @@ class _CameraScreenState extends State<CameraScreen> {
       ),
     );
 
-    // Traitement du retour (identique à _analyzeImage)
     if (result != null && mounted) {
       if (result['action'] == 'view_on_map') {
         Navigator.push(
@@ -313,11 +313,7 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  // ============================================================
-  // LANCER LE MODE TEMPS RÉEL
-  // ============================================================
   Future<void> _startRealtimeScan() async {
-    // Vérifier les permissions
     final status = await Permission.camera.request();
     if (!status.isGranted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -329,7 +325,6 @@ class _CameraScreenState extends State<CameraScreen> {
       return;
     }
 
-    // Naviguer vers l'écran de scan temps réel
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -357,16 +352,12 @@ class _CameraScreenState extends State<CameraScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.notifications_none),
-            onPressed: () {
-              // TODO: Naviguer vers notifications
-            },
+            onPressed: () {},
             color: AppTheme.primary,
           ),
           IconButton(
             icon: const Icon(Icons.person_outline),
-            onPressed: () {
-              // TODO: Naviguer vers profil
-            },
+            onPressed: () {},
             color: AppTheme.primary,
           ),
         ],
@@ -375,7 +366,6 @@ class _CameraScreenState extends State<CameraScreen> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Zone caméra / image
             Container(
               height: 200,
               width: double.infinity,
@@ -406,8 +396,6 @@ class _CameraScreenState extends State<CameraScreen> {
                     ),
             ),
             const SizedBox(height: 20),
-
-            // Boutons
             ElevatedButton.icon(
               onPressed:
                   _isLoading ? null : () => _pickImage(ImageSource.camera),
@@ -421,7 +409,6 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
             const SizedBox(height: 12),
-
             OutlinedButton.icon(
               onPressed:
                   _isLoading ? null : () => _pickImage(ImageSource.gallery),
@@ -436,8 +423,6 @@ class _CameraScreenState extends State<CameraScreen> {
               ),
             ),
             const SizedBox(height: 12),
-
-            // Bouton Mode temps réel
             OutlinedButton.icon(
               onPressed: _isLoading ? null : _startRealtimeScan,
               icon: const Icon(Icons.videocam),
@@ -450,10 +435,7 @@ class _CameraScreenState extends State<CameraScreen> {
                     borderRadius: BorderRadius.circular(12)),
               ),
             ),
-
             const SizedBox(height: 20),
-
-            // Bouton Analyser
             if (_image != null)
               SizedBox(
                 width: double.infinity,
@@ -475,8 +457,6 @@ class _CameraScreenState extends State<CameraScreen> {
                       : const Text('Analyser'),
                 ),
               ),
-
-            // Dernier diagnostic (CLICKABLE)
             if (_lastDiagnosis.isNotEmpty)
               GestureDetector(
                 onTap: _openLastDiagnostic,
@@ -555,8 +535,6 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
                 ),
               ),
-
-            // Résultat (message d'erreur éventuel)
             if (_result.isNotEmpty && _result.startsWith('Erreur'))
               Padding(
                 padding: const EdgeInsets.only(top: 20),
