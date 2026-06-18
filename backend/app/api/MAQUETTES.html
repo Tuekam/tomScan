@@ -1,0 +1,486 @@
+```html
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>TomScan — Diagnostic agricole</title>
+    <!-- Google Fonts + Font Awesome (pour quelques icônes terrain) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #F4F4F4;
+            font-family: 'Inter', sans-serif;
+            padding: 24px 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ---------- CONTAINER GLOBAL (simule un écran mobile) ---------- */
+        .phone-mock {
+            max-width: 400px;
+            width: 100%;
+            margin: 0 auto;
+            background: #FFFFFF;
+            border-radius: 32px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+
+        /* STATUT BAR + APP BAR */
+        .status-bar {
+            padding: 12px 20px 6px;
+            background: white;
+            font-size: 14px;
+            color: #1B1B1B;
+            display: flex;
+            justify-content: space-between;
+            font-weight: 500;
+            border-bottom: 1px solid #F4F4F4;
+        }
+
+        .app-bar {
+            padding: 8px 20px 8px;
+            background: white;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #F4F4F4;
+        }
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .logo-icon {
+            font-size: 24px;
+            color: #2D6A4F;
+        }
+        .app-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1B1B1B;
+            letter-spacing: -0.3px;
+        }
+        .app-badge {
+            background: #D8F3DC;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #2D6A4F;
+        }
+        .header-icons {
+            display: flex;
+            gap: 16px;
+            color: #2D6A4F;
+            font-size: 20px;
+        }
+
+        /* BOTTOM NAVIGATION */
+        .bottom-nav {
+            display: flex;
+            justify-content: space-around;
+            padding: 12px 20px 20px;
+            background: white;
+            border-top: 1px solid #F4F4F4;
+        }
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            color: #888888;
+            transition: color 0.1s;
+        }
+        .nav-item i {
+            font-size: 22px;
+            color: #888888;
+        }
+        .nav-item.active i,
+        .nav-item.active span {
+            color: #2D6A4F;
+            font-weight: 500;
+        }
+        .nav-item span {
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        /* CONTENU PRINCIPAL */
+        .screen-content {
+            padding: 20px;
+        }
+
+        /* CARTES et composants */
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 20px;
+            border: 1px solid #EEEEEE;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1B1B1B;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card-title i {
+            color: #52B788;
+            font-size: 18px;
+        }
+
+        /* ZONE CAMÉRA */
+        .camera-placeholder {
+            background: #D8F3DC;
+            border-radius: 20px;
+            height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            color: #2D6A4F;
+            font-weight: 500;
+        }
+        .camera-placeholder i {
+            font-size: 48px;
+            color: #2D6A4F;
+        }
+
+        /* BOUTONS */
+        .btn-primary {
+            background: #2D6A4F;
+            border: none;
+            border-radius: 12px;
+            padding: 14px;
+            width: 100%;
+            font-weight: 600;
+            font-size: 15px;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.1s;
+            margin-bottom: 12px;
+        }
+        .btn-secondary {
+            background: white;
+            border: 1px solid #D8F3DC;
+            border-radius: 12px;
+            padding: 14px;
+            width: 100%;
+            font-weight: 500;
+            font-size: 15px;
+            color: #2D6A4F;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            margin-bottom: 12px;
+        }
+        .btn-outline {
+            background: white;
+            border: 1px solid #E2E2E2;
+            border-radius: 12px;
+            padding: 12px;
+            width: 100%;
+            font-weight: 500;
+            color: #555555;
+        }
+
+        /* RÉSULTAT DIAGNOSTIC */
+        .result-badge {
+            background: #D8F3DC;
+            border-radius: 20px;
+            padding: 12px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .disease-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #2D6A4F;
+            margin-bottom: 6px;
+        }
+        .confidence {
+            font-size: 14px;
+            color: #555555;
+        }
+
+        .carousel-images {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            margin: 16px 0;
+            padding-bottom: 8px;
+        }
+        .ref-card {
+            min-width: 100px;
+            background: #F4F4F4;
+            border-radius: 16px;
+            padding: 8px;
+            text-align: center;
+            font-size: 12px;
+            color: #2D6A4F;
+            font-weight: 500;
+        }
+
+        .stat-grid {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #F4F4F4;
+            border-radius: 16px;
+            padding: 12px;
+            text-align: center;
+            flex: 1;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1B1B1B;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #888888;
+        }
+
+        .zone-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #EEEEEE;
+        }
+        .zone-name {
+            font-weight: 500;
+            color: #1B1B1B;
+        }
+        .zone-risk {
+            font-size: 13px;
+            padding: 4px 10px;
+            border-radius: 40px;
+            background: #D8F3DC;
+            color: #2D6A4F;
+        }
+
+        .message-bubble {
+            background: #F4F4F4;
+            border-radius: 20px;
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            max-width: 85%;
+        }
+
+        .message-bubble.user {
+            background: #D8F3DC;
+            align-self: flex-end;
+            margin-left: auto;
+            color: #1B1B1B;
+        }
+
+        hr {
+            margin: 16px 0;
+            border: 0;
+            height: 1px;
+            background: #EEEEEE;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- PAGE 1 : DIAGNOSTIC (ACCUEIL) -->
+    <div class="phone-mock">
+        <div class="status-bar">
+            <span>9:41</span>
+            <span>📶 🔋 100%</span>
+        </div>
+        <div class="app-bar">
+            <div class="logo-area">
+                <i class="fas fa-seedling logo-icon"></i>
+                <span class="app-title">TomScan</span>
+            </div>
+            <div class="header-icons">
+                <i class="fas fa-bell"></i>
+                <i class="fas fa-user-circle"></i>
+            </div>
+        </div>
+        <div class="screen-content">
+            <div class="camera-placeholder">
+                <i class="fas fa-camera"></i>
+                <span>Prêt à scanner</span>
+                <span style="font-size: 12px; color:#555;">Cadrez une feuille de tomate</span>
+            </div>
+            <button class="btn-primary"><i class="fas fa-camera"></i> Prendre une photo</button>
+            <button class="btn-secondary"><i class="fas fa-images"></i> Choisir dans la galerie</button>
+            <button class="btn-secondary"><i class="fas fa-video"></i> Mode temps réel</button>
+            
+            <div class="card">
+                <div class="card-title"><i class="fas fa-map-marker-alt"></i> Dernier diagnostic</div>
+                <div style="display: flex; justify-content: space-between;">
+                    <div><strong>Mildiou</strong><br><span style="font-size: 12px; color:#888;">Aujourd'hui 10:30</span></div>
+                    <div><span style="background:#D8F3DC; padding:4px 10px; border-radius:20px; font-size:12px;">95%</span></div>
+                </div>
+                <div style="font-size: 12px; color:#555; margin-top: 8px;">📍 Parcelle Nord, Douala</div>
+            </div>
+        </div>
+        <div class="bottom-nav">
+            <div class="nav-item active"><i class="fas fa-leaf"></i><span>Diag</span></div>
+            <div class="nav-item"><i class="fas fa-map"></i><span>Carte</span></div>
+            <div class="nav-item"><i class="fas fa-history"></i><span>Histo</span></div>
+            <div class="nav-item"><i class="fas fa-comment-dots"></i><span>Chat</span></div>
+            <div class="nav-item"><i class="fas fa-user"></i><span>Profil</span></div>
+        </div>
+    </div>
+
+    <!-- PAGE 2 : RÉSULTAT DIAGNOSTIC -->
+    <div class="phone-mock">
+        <div class="status-bar"><span>9:41</span><span>📶 🔋 100%</span></div>
+        <div class="app-bar">
+            <i class="fas fa-arrow-left" style="font-size: 20px; color:#1B1B1B;"></i>
+            <span class="app-title">Résultat</span>
+            <div></div>
+        </div>
+        <div class="screen-content">
+            <div class="camera-placeholder" style="height:160px; background:#F4F4F4;"><i class="fas fa-leaf" style="color:#2D6A4F;"></i> Votre feuille</div>
+            <div class="result-badge">
+                <div class="disease-name">🌿 Mildiou</div>
+                <div class="confidence">Confiance : <strong>95%</strong></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-images"></i> Images de référence</div>
+                <div class="carousel-images">
+                    <div class="ref-card">Stade 1</div>
+                    <div class="ref-card">Stade 2</div>
+                    <div class="ref-card">Stade 3</div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-info-circle"></i> Description</div>
+                <div style="font-size: 14px; color:#555;">Maladie fongique causée par <strong>Phytophthora infestans</strong>. Apparaît par temps humide.</div>
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-exclamation-triangle"></i> Symptômes</div>
+                <div style="font-size: 14px; color:#555;">• Taches brunes<br>• Duvet blanc sous la feuille<br>• Flétrissement rapide</div>
+            </div>
+            <div class="card" style="background:#D8F3DC;">
+                <div class="card-title"><i class="fas fa-tractor"></i> Recommandation</div>
+                <div style="font-size: 14px;">✅ Bouillie bordelaise<br>✅ Retirer les feuilles infectées<br>✅ Espacer les arrosages</div>
+            </div>
+            <button class="btn-primary"><i class="fas fa-map-marker-alt"></i> Voir sur la carte</button>
+            <button class="btn-secondary"><i class="fas fa-comment"></i> Poser une question</button>
+        </div>
+        <div class="bottom-nav"><div class="nav-item active"><i class="fas fa-leaf"></i><span>Diag</span></div><div class="nav-item"><i class="fas fa-map"></i><span>Carte</span></div><div class="nav-item"><i class="fas fa-history"></i><span>Histo</span></div><div class="nav-item"><i class="fas fa-comment-dots"></i><span>Chat</span></div><div class="nav-item"><i class="fas fa-user"></i><span>Profil</span></div></div>
+    </div>
+
+    <!-- PAGE 3 : CARTE & ZONES -->
+    <div class="phone-mock">
+        <div class="status-bar"><span>9:41</span><span>📶 🔋 100%</span></div>
+        <div class="app-bar"><i class="fas fa-arrow-left"></i><span class="app-title">Zones infectées</span><i class="fas fa-sliders-h"></i></div>
+        <div class="screen-content">
+            <div style="background:#D8F3DC; border-radius: 20px; height: 240px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; color:#2D6A4F;">
+                <i class="fas fa-map-marked-alt" style="font-size: 48px;"></i> 🗺️ Carte
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-chart-simple"></i> Légende</div>
+                <div style="display: flex; gap: 12px; font-size: 13px;"><span>🔴 ≥20 obs</span> <span>🟠 10-19</span> <span>🟢 <10</span></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-virus"></i> Foyers actifs</div>
+                <div class="zone-item"><span class="zone-name">Parcelle Nord</span><span class="zone-risk">Mildiou (22 obs)</span></div>
+                <div class="zone-item"><span class="zone-name">Parcelle Est</span><span class="zone-risk">Alternariose (12 obs)</span></div>
+                <div class="zone-item"><span class="zone-name">Serre Ouest</span><span class="zone-risk">Tache bactérienne (8 obs)</span></div>
+            </div>
+        </div>
+        <div class="bottom-nav"><div class="nav-item"><i class="fas fa-leaf"></i><span>Diag</span></div><div class="nav-item active"><i class="fas fa-map"></i><span>Carte</span></div><div class="nav-item"><i class="fas fa-history"></i><span>Histo</span></div><div class="nav-item"><i class="fas fa-comment-dots"></i><span>Chat</span></div><div class="nav-item"><i class="fas fa-user"></i><span>Profil</span></div></div>
+    </div>
+
+    <!-- PAGE 4 : HISTORIQUE -->
+    <div class="phone-mock">
+        <div class="status-bar"><span>9:41</span><span>📶 🔋 100%</span></div>
+        <div class="app-bar"><i class="fas fa-arrow-left"></i><span class="app-title">Historique</span><i class="fas fa-filter"></i></div>
+        <div class="screen-content">
+            <div class="card">
+                <div style="display: flex; justify-content: space-between;"><span><strong>Mildiou</strong> · 95%</span><span>10/06/2025</span></div>
+                <div style="font-size: 12px; color:#888;">📍 Parcelle Nord, Douala</div>
+                <hr>
+                <div style="display: flex; justify-content: space-between;"><span><strong>Alternariose</strong> · 87%</span><span>09/06/2025</span></div>
+                <div style="font-size: 12px; color:#888;">📍 Parcelle Est, Yaoundé</div>
+                <hr>
+                <div style="display: flex; justify-content: space-between;"><span><strong>Sain</strong> · 98%</span><span>08/06/2025</span></div>
+                <div style="font-size: 12px; color:#888;">📍 Serre Ouest</div>
+            </div>
+            <button class="btn-outline"><i class="fas fa-download"></i> Exporter</button>
+        </div>
+        <div class="bottom-nav"><div class="nav-item"><i class="fas fa-leaf"></i><span>Diag</span></div><div class="nav-item"><i class="fas fa-map"></i><span>Carte</span></div><div class="nav-item active"><i class="fas fa-history"></i><span>Histo</span></div><div class="nav-item"><i class="fas fa-comment-dots"></i><span>Chat</span></div><div class="nav-item"><i class="fas fa-user"></i><span>Profil</span></div></div>
+    </div>
+
+    <!-- PAGE 5 : CHATBOT -->
+    <div class="phone-mock">
+        <div class="status-bar"><span>9:41</span><span>📶 🔋 100%</span></div>
+        <div class="app-bar"><i class="fas fa-arrow-left"></i><span class="app-title">Assistant TomScan</span><i class="fas fa-ellipsis-v"></i></div>
+        <div class="screen-content">
+            <div class="message-bubble"><i class="fas fa-robot" style="color:#2D6A4F;"></i> Bonjour ! Je suis votre assistant tomate. Posez-moi vos questions.</div>
+            <div class="message-bubble user">Comment traiter le mildiou ?</div>
+            <div class="message-bubble">🌿 Appliquez de la bouillie bordelaise, retirez les feuilles infectées et aérez vos plants.</div>
+            <div class="message-bubble user">Quels sont les signes de l’alternariose ?</div>
+            <div class="message-bubble">Taches brunes concentriques, jaunissement. Traitez avec du fongicide à base de cuivre.</div>
+            <div style="margin-top: 24px; display: flex; gap: 10px;">
+                <input type="text" placeholder="Écrivez votre question..." style="flex:1; padding: 12px; border-radius: 30px; border:1px solid #E2E2E2;">
+                <button class="btn-primary" style="width: auto; padding: 0 16px;"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+        <div class="bottom-nav"><div class="nav-item"><i class="fas fa-leaf"></i><span>Diag</span></div><div class="nav-item"><i class="fas fa-map"></i><span>Carte</span></div><div class="nav-item"><i class="fas fa-history"></i><span>Histo</span></div><div class="nav-item active"><i class="fas fa-comment-dots"></i><span>Chat</span></div><div class="nav-item"><i class="fas fa-user"></i><span>Profil</span></div></div>
+    </div>
+
+    <!-- PAGE 6 : PROFIL -->
+    <div class="phone-mock">
+        <div class="status-bar"><span>9:41</span><span>📶 🔋 100%</span></div>
+        <div class="app-bar"><i class="fas fa-arrow-left"></i><span class="app-title">Mon profil</span><i class="fas fa-edit"></i></div>
+        <div class="screen-content">
+            <div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 24px;">
+                <div style="background: #D8F3DC; width: 80px; height: 80px; border-radius: 40px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px;"><i class="fas fa-user" style="font-size: 36px; color:#2D6A4F;"></i></div>
+                <div class="app-title" style="font-size: 18px;">Jules TUEKAM</div>
+                <div style="font-size: 14px; color:#888;">Agriculteur / Douala</div>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-card"><div class="stat-number">45</div><div class="stat-label">Diag.</div></div>
+                <div class="stat-card"><div class="stat-number">32</div><div class="stat-label">Maladies</div></div>
+                <div class="stat-card"><div class="stat-number">8</div><div class="stat-label">Zones</div></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><i class="fas fa-envelope"></i> Contact</div>
+                <div>jules@tomscan.com</div>
+                <div>+237 691 234 567</div>
+            </div>
+            <button class="btn-secondary"><i class="fas fa-sign-out-alt"></i> Se déconnecter</button>
+        </div>
+        <div class="bottom-nav"><div class="nav-item"><i class="fas fa-leaf"></i><span>Diag</span></div><div class="nav-item"><i class="fas fa-map"></i><span>Carte</span></div><div class="nav-item"><i class="fas fa-history"></i><span>Histo</span></div><div class="nav-item"><i class="fas fa-comment-dots"></i><span>Chat</span></div><div class="nav-item active"><i class="fas fa-user"></i><span>Profil</span></div></div>
+    </div>
+</body>
+</html>
+```

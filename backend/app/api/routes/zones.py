@@ -1,0 +1,80 @@
+# backend/app/api/routes/zones.py
+from fastapi import APIRouter
+import asyncpg
+from app.core.config import settings
+
+router = APIRouter()
+
+@router.get("/zones")
+async def get_zones():
+    """Retourne toutes les zones infectées au format GeoJSON"""
+    conn = await asyncpg.connect(settings.DATABASE_URL)
+    try:
+        rows = await conn.fetch("""
+            SELECT 
+                z.id_zone,
+                z.centre_latitude,
+                z.centre_longitude,
+                z.rayon,
+                z.nombre_observations,
+                z.zone_type,
+                z.id_parcelle,
+                p.nom as parcelle_nom
+            FROM zone_infectee z
+            LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+            ORDER BY z.id_zone
+        """)
+        
+        features = []
+        for row in rows:
+            zone_type = row['zone_type'] or "HORS_PARCELLE"
+            nombre_obs = row['nombre_observations']
+            
+            # Déterminer la couleur selon le type
+            if zone_type == "HORS_PARCELLE":
+                couleur = "orange"
+                niveau = "Hors parcelle"
+            elif zone_type == "MULTI_PARCELLES":
+                couleur = "red"
+                niveau = "Multi-parcelles"
+            else:  # DANS_PARCELLE
+                if nombre_obs >= 20:
+                    couleur = "red"
+                    niveau = "Critique"
+                elif nombre_obs >= 10:
+                    couleur = "orange"
+                    niveau = "Actif"
+                else:
+                    couleur = "yellow"
+                    niveau = "Émergent"
+            
+            # Construction du texte de l'info-bulle
+            popup_text = f"Zone #{row['id_zone']} - {niveau}"
+            if row['parcelle_nom']:
+                popup_text += f" - {row['parcelle_nom']}"
+            popup_text += f" - {nombre_obs} obs"
+            
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [row["centre_longitude"], row["centre_latitude"]]
+                },
+                "properties": {
+                    "id": row["id_zone"],
+                    "rayon": row["rayon"],
+                    "nombre_observations": nombre_obs,
+                    "couleur": couleur,
+                    "zone_type": zone_type,
+                    "id_parcelle": row["id_parcelle"],
+                    "parcelle_nom": row["parcelle_nom"],
+                    "popup_text": popup_text
+                }
+            })
+        
+        return {
+            "type": "FeatureCollection",
+            "features": features
+        }
+    finally:
+        await conn.close()

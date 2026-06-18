@@ -1,0 +1,584 @@
+// screens/camera_screen.dart
+import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:dio/dio.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../theme.dart';
+import 'result_screen.dart';
+import 'map_screen.dart';
+import 'realtime_scan_screen.dart';
+import 'chatbot_screen.dart'; // ← AJOUTER CET IMPORT
+
+class CameraScreen extends StatefulWidget {
+  const CameraScreen({super.key});
+
+  @override
+  State<CameraScreen> createState() => _CameraScreenState();
+}
+
+class _CameraScreenState extends State<CameraScreen> {
+  final ImagePicker _picker = ImagePicker();
+  final Dio _dio = Dio();
+  File? _image;
+  String _result = '';
+  bool _isLoading = false;
+
+  String _lastDiagnosis = '';
+  String _lastConfidence = '';
+  String _lastDate = '';
+  String _lastLocation = '';
+  Map<String, dynamic>? _lastDiagnosticData;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLastDiagnosis();
+  }
+
+  Future<void> _loadLastDiagnosis() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    setState(() {
+      _lastDiagnosis = prefs.getString('last_diagnosis') ?? '';
+      _lastConfidence = prefs.getString('last_confidence') ?? '';
+      _lastDate = prefs.getString('last_date') ?? '';
+      _lastLocation = prefs.getString('last_location') ?? '';
+    });
+
+    final lastData = prefs.getString('last_diagnostic_data');
+    if (lastData != null) {
+      try {
+        _lastDiagnosticData =
+            Map<String, dynamic>.from(json.decode(lastData) as Map);
+      } catch (e) {
+        print('Erreur chargement données: $e');
+      }
+    }
+  }
+
+  Future<void> _saveLastDiagnosis({
+    required String diagnosis,
+    required String confidence,
+    required String date,
+    required String location,
+    required Map<String, dynamic> fullData,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.setString('last_diagnosis', diagnosis);
+    await prefs.setString('last_confidence', confidence);
+    await prefs.setString('last_date', date);
+    await prefs.setString('last_location', location);
+    await prefs.setString('last_diagnostic_data', json.encode(fullData));
+
+    setState(() {
+      _lastDiagnosis = diagnosis;
+      _lastConfidence = confidence;
+      _lastDate = date;
+      _lastLocation = location;
+      _lastDiagnosticData = fullData;
+    });
+  }
+
+  Future<void> _checkPermissions() async {
+    await Permission.camera.request();
+    await Permission.location.request();
+  }
+
+  Future<Position?> _getCurrentLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          return null;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        return null;
+      }
+
+      return await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+    } catch (e) {
+      print('Erreur GPS: $e');
+      return null;
+    }
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    await _checkPermissions();
+    final pickedFile = await _picker.pickImage(source: source);
+    if (pickedFile != null) {
+      setState(() {
+        _image = File(pickedFile.path);
+        _result = '';
+      });
+    }
+  }
+
+  String _getLocationName(double lat, double lon) {
+    return 'Lat: ${lat.toStringAsFixed(4)}, Lon: ${lon.toStringAsFixed(4)}';
+  }
+
+  String _getFormattedDate() {
+    final now = DateTime.now();
+    return '${now.day}/${now.month}/${now.year} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _analyzeImage() async {
+    if (_image == null) return;
+
+    setState(() => _isLoading = true);
+    _result = '';
+
+    try {
+      final position = await _getCurrentLocation();
+      final lat = position?.latitude ?? 0.0;
+      final lon = position?.longitude ?? 0.0;
+
+      final formData = FormData.fromMap({
+        'image': await MultipartFile.fromFile(_image!.path),
+        'latitude': lat,
+        'longitude': lon,
+        'precision_gps': position?.accuracy ?? 5.0,
+      });
+
+      final response = await _dio.post(
+        'http://192.168.0.176:8000/api/predict',
+        data: formData,
+      );
+
+      final data = response.data;
+      final maladie = data['maladie']?.toString() ?? 'Inconnue';
+      final confiance = data['confiance']?.toDouble() ?? 0.0;
+
+      final locationName = _getLocationName(lat, lon);
+      final formattedDate = _getFormattedDate();
+
+      String displayDiagnosis = maladie.replaceAll('_', ' ');
+      if (displayDiagnosis.contains('healthy')) displayDiagnosis = 'Sain';
+      if (displayDiagnosis.contains('Tomato '))
+        displayDiagnosis = displayDiagnosis.replaceAll('Tomato ', '');
+
+      final fullData = {
+        'imagePath': _image!.path,
+        'maladie': maladie,
+        'confiance': confiance,
+        'id_diagnostic': data['id_diagnostic'] ?? 0,
+        'id_observation': data['id_observation'] ?? 0,
+        'latitude': lat,
+        'longitude': lon,
+        'description': data['description'] ?? '',
+        'symptomes': data['symptomes'] ?? '',
+        'recommandation': data['recommandation'] ?? '',
+        'niveau_gravite': data['niveau_gravite'] ?? '',
+      };
+
+      await _saveLastDiagnosis(
+        diagnosis: displayDiagnosis,
+        confidence: confiance.toString(),
+        date: formattedDate,
+        location: locationName,
+        fullData: fullData,
+      );
+
+      if (!mounted) return;
+
+      // Navigation vers l'écran résultat avec attente du retour
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ResultScreen(
+            imagePath: _image!.path,
+            maladie: maladie,
+            confiance: confiance,
+            idDiagnostic: data['id_diagnostic'] ?? 0,
+            idObservation: data['id_observation'] ?? 0,
+            latitude: lat,
+            longitude: lon,
+            description: data['description'] ?? '',
+            symptomes: data['symptomes'] ?? '',
+            recommandation: data['recommandation'] ?? '',
+            niveauGravite: data['niveau_gravite'] ?? '',
+          ),
+        ),
+      );
+
+      // Traitement du retour (bouton "Voir sur la carte" ou "Poser une question")
+      if (result != null && mounted) {
+        if (result['action'] == 'view_on_map') {
+          // Naviguer vers la carte avec les coordonnées
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MapScreen(
+                initialLatitude: result['latitude'],
+                initialLongitude: result['longitude'],
+                highlightDiagnosticId: result['id_diagnostic'],
+                highlightMaladie: result['maladie'],
+                highlightConfiance: result['confiance'],
+              ),
+            ),
+          );
+        } else if (result['action'] == 'ask_chatbot') {
+          // Naviguer vers ChatbotScreen avec question pré-remplie
+          final question = result['question'] ?? '';
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatbotScreen(initialQuestion: question),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      setState(() => _result = 'Erreur: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _openLastDiagnostic() async {
+    if (_lastDiagnosticData == null) return;
+
+    final data = _lastDiagnosticData!;
+
+    // Utiliser Navigator.push et attendre le résultat (comme dans _analyzeImage)
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ResultScreen(
+          imagePath: data['imagePath'] ?? '',
+          maladie: data['maladie'] ?? 'Inconnue',
+          confiance: (data['confiance'] ?? 0.0).toDouble(),
+          idDiagnostic: data['id_diagnostic'] ?? 0,
+          idObservation: data['id_observation'] ?? 0,
+          latitude: data['latitude'] ?? 0.0,
+          longitude: data['longitude'] ?? 0.0,
+          description: data['description'] ?? '',
+          symptomes: data['symptomes'] ?? '',
+          recommandation: data['recommandation'] ?? '',
+          niveauGravite: data['niveau_gravite'] ?? '',
+        ),
+      ),
+    );
+
+    // Traitement du retour (identique à _analyzeImage)
+    if (result != null && mounted) {
+      if (result['action'] == 'view_on_map') {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => MapScreen(
+              initialLatitude: result['latitude'],
+              initialLongitude: result['longitude'],
+              highlightDiagnosticId: result['id_diagnostic'],
+              highlightMaladie: result['maladie'],
+              highlightConfiance: result['confiance'],
+            ),
+          ),
+        );
+      } else if (result['action'] == 'ask_chatbot') {
+        final question = result['question'] ?? '';
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatbotScreen(initialQuestion: question),
+          ),
+        );
+      }
+    }
+  }
+
+  // ============================================================
+  // LANCER LE MODE TEMPS RÉEL
+  // ============================================================
+  Future<void> _startRealtimeScan() async {
+    // Vérifier les permissions
+    final status = await Permission.camera.request();
+    if (!status.isGranted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Permission caméra refusée'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Naviguer vers l'écran de scan temps réel
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const RealtimeScanScreen(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Icon(Icons.eco, color: AppTheme.primary),
+            const SizedBox(width: 8),
+            const Text(
+              'TomScan',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.notifications_none),
+            onPressed: () {
+              // TODO: Naviguer vers notifications
+            },
+            color: AppTheme.primary,
+          ),
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            onPressed: () {
+              // TODO: Naviguer vers profil
+            },
+            color: AppTheme.primary,
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            // Zone caméra / image
+            Container(
+              height: 200,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryLight.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: _image != null
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.file(_image!, fit: BoxFit.cover),
+                    )
+                  : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.camera_alt,
+                            size: 48, color: AppTheme.primary),
+                        const SizedBox(height: 8),
+                        Text('Prêt à scanner',
+                            style: TextStyle(color: AppTheme.primary)),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Cadrez une feuille de tomate',
+                          style: TextStyle(
+                              fontSize: 12, color: AppTheme.textMedium),
+                        ),
+                      ],
+                    ),
+            ),
+            const SizedBox(height: 20),
+
+            // Boutons
+            ElevatedButton.icon(
+              onPressed:
+                  _isLoading ? null : () => _pickImage(ImageSource.camera),
+              icon: const Icon(Icons.camera_alt),
+              label: const Text('Prendre une photo'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            OutlinedButton.icon(
+              onPressed:
+                  _isLoading ? null : () => _pickImage(ImageSource.gallery),
+              icon: const Icon(Icons.image),
+              label: const Text('Choisir dans la galerie'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primary,
+                side: const BorderSide(color: AppTheme.primaryLight),
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Bouton Mode temps réel
+            OutlinedButton.icon(
+              onPressed: _isLoading ? null : _startRealtimeScan,
+              icon: const Icon(Icons.videocam),
+              label: const Text('Mode temps réel'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primary,
+                side: const BorderSide(color: AppTheme.primaryLight),
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Bouton Analyser
+            if (_image != null)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _analyzeImage,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    minimumSize: const Size(double.infinity, 50),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Analyser'),
+                ),
+              ),
+
+            // Dernier diagnostic (CLICKABLE)
+            if (_lastDiagnosis.isNotEmpty)
+              GestureDetector(
+                onTap: _openLastDiagnostic,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 20),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.grey.shade200),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.grey.withOpacity(0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.history,
+                                size: 18, color: AppTheme.primary),
+                            const SizedBox(width: 8),
+                            const Text('Dernier diagnostic',
+                                style: TextStyle(fontWeight: FontWeight.w600)),
+                            const Spacer(),
+                            Icon(Icons.chevron_right,
+                                size: 18, color: Colors.grey),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(_lastDiagnosis,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16)),
+                                Text(_lastDate,
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.grey)),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryLight.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text('$_lastConfidence%',
+                                  style: TextStyle(color: AppTheme.primary)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(Icons.location_on,
+                                size: 12, color: Colors.grey),
+                            const SizedBox(width: 4),
+                            Text(_lastLocation,
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // Résultat (message d'erreur éventuel)
+            if (_result.isNotEmpty && _result.startsWith('Erreur'))
+              Padding(
+                padding: const EdgeInsets.only(top: 20),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text('Erreur',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      Text(_result, textAlign: TextAlign.center),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}

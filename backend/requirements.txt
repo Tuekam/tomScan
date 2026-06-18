@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+python-multipart
+torch
+torchvision
+pillow
+numpy
+scikit-learn
+psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+mistralai
+pydantic
+pytest
+httpx
+pytest-asyncio
