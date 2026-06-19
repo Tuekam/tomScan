@@ -24,7 +24,7 @@ obs_repo = ObservationRepository()
 maladie_repo = MaladieRepository()
 zone_repo = ZoneRepository()
 
-# Chargement du modèle YOLO (utilise settings.YOLO_MODEL_PATH)
+# Chargement du modèle YOLO
 yolo_model = YOLO(settings.YOLO_MODEL_PATH)
 
 # Règles métier depuis settings
@@ -83,18 +83,41 @@ async def trouver_parcelle_du_point(lat: float, lon: float) -> int | None:
     finally:
         await conn.close()
 
+async def creer_notification(
+    id_utilisateur: int,
+    titre: str,
+    message: str,
+    type: str,
+    id_zone: int = None,
+    id_parcelle: int = None,
+    latitude: float = None,
+    longitude: float = None
+):
+    """Crée une notification pour l'utilisateur avec coordonnées"""
+    conn = await asyncpg.connect(settings.DATABASE_URL)
+    try:
+        await conn.execute("""
+            INSERT INTO notification 
+                (id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+        print(f"🔔 Notification créée: {titre}")
+    finally:
+        await conn.close()
+
 @router.post("/predict")
 async def predict(
     image: UploadFile = File(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
     precision_gps: float = Form(0.0),
-    id_parcelle: int = Form(None)
+    id_parcelle: int = Form(None),
+    id_utilisateur: int = Form(1)  # ← NOUVEAU PARAMÈTRE
 ):
     # 1. Lecture de l'image
     image_bytes = await image.read()
 
-    # Sauvegarde de l'image sur disque (utilise settings.UPLOAD_DIR)
+    # Sauvegarde de l'image sur disque
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
     image_filename = f"{uuid.uuid4()}.{extension}"
@@ -103,7 +126,7 @@ async def predict(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
     
-    # 2. Vérification YOLO (utilise SEUIL_CONFIANCE_YOLO)
+    # 2. Vérification YOLO
     if not await contient_plante(image_bytes):
         return {
             "maladie": "Non identifiable",
@@ -118,8 +141,8 @@ async def predict(
     # 3. Classification ResNet18
     maladie, confiance = await ia_service.classifier(image_bytes)
 
-    # 4. Sauvegarde du diagnostic
-    id_diagnostic = await diag_repo.save_diagnostic(1, "PHOTO", id_parcelle)
+    # 4. Sauvegarde du diagnostic (avec id_utilisateur)
+    id_diagnostic = await diag_repo.save_diagnostic(id_utilisateur, "PHOTO", id_parcelle)
 
     # 5. Récupération de l'id de la maladie
     id_maladie = await maladie_repo.get_id_by_nom(maladie)
@@ -155,16 +178,22 @@ async def predict(
             print(f"⚠️ Observation #{id_observation} hors parcelle")
 
     # ============================================================
-    # REGROUPEMENT (utilise RAYON_GROUPEMENT_M et SEUIL_CREATION_ZONE)
+    # REGROUPEMENT
     # ============================================================
     
-    # 9. Trouver les observations proches de la nouvelle observation
+    # 9. Trouver les observations proches
     observations_proches = await obs_repo.get_observations_proches(
         latitude, longitude, RAYON_GROUPEMENT_M, exclude_id=id_observation
     )
     
     # 10. Ajouter la nouvelle observation au groupe
-    groupe = observations_proches + [{"id_observation": id_observation, "latitude": latitude, "longitude": longitude, "id_parcelle": parcelle_associee}]
+    groupe = observations_proches + [{
+        "id_observation": id_observation, 
+        "latitude": latitude, 
+        "longitude": longitude, 
+        "id_parcelle": parcelle_associee,
+        "maladie_nom": maladie
+    }]
     
     zone_impactee = False
     id_zone = None
@@ -191,7 +220,7 @@ async def predict(
             id_parcelle_associee = None
             zone_type = "HORS_PARCELLE"
         
-        # Vérifier si une zone existe déjà à proximité (utilise RAYON_RECHERCHE_ZONE)
+        # Vérifier si une zone existe déjà à proximité
         id_existant = await zone_repo.zone_existe_proche(
             centre_lat, centre_lon, RAYON_RECHERCHE_ZONE
         )
@@ -212,6 +241,43 @@ async def predict(
                 centre_lat, centre_lon, len(groupe), id_parcelle_associee, zone_type
             )
             print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type})")
+            
+            # ============================================================
+            # CRÉER UNE NOTIFICATION POUR LA NOUVELLE ZONE
+            # ============================================================
+            nb_obs = len(groupe)
+            if nb_obs >= 20:
+                titre = "🚨 Zone critique détectée !"
+                message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
+                type_notif = "zone_critique"
+            elif nb_obs >= 10:
+                titre = "⚠️ Zone active détectée"
+                message = f"Une zone infectée active a été détectée avec {nb_obs} observations. Traitement recommandé."
+                type_notif = "zone_creee"
+            else:
+                titre = "📍 Nouvelle zone émergente"
+                message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
+                type_notif = "zone_creee"
+            
+            # Récupérer le nom de la maladie dominante
+            maladies_groupe = {}
+            for obs in groupe:
+                m = obs.get("maladie_nom", "Inconnue")
+                maladies_groupe[m] = maladies_groupe.get(m, 0) + 1
+            maladie_dominante = max(maladies_groupe, key=maladies_groupe.get) if maladies_groupe else "Inconnue"
+            maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
+            
+            # Créer la notification AVEC coordonnées
+            await creer_notification(
+                id_utilisateur=id_utilisateur,
+                titre=titre,
+                message=f"{message} Maladie dominante: {maladie_dominante}.",
+                type=type_notif,
+                id_zone=id_zone,
+                id_parcelle=id_parcelle_associee,
+                latitude=centre_lat,
+                longitude=centre_lon
+            )
         
         zone_impactee = True
 

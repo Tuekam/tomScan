@@ -17,9 +17,12 @@ async def get_stats(
         jours = {"7j": 7, "30j": 30, "90j": 90, "365j": 365}.get(periode, 30)
         
         # Filtres pour les observations
-        obs_filters = ["o.timestamp >= NOW() - INTERVAL '1 day' * $1"]
-        params = [jours]
-        param_index = 2
+        obs_filters = [
+            "o.timestamp >= NOW() - INTERVAL '1 day' * $1",
+            "d.id_utilisateur = $2"  # ← FILTRER PAR UTILISATEUR
+        ]
+        params = [jours, user_id]
+        param_index = 3
         
         if parcelle_id:
             obs_filters.append(f"o.id_parcelle = ${param_index}")
@@ -32,7 +35,7 @@ async def get_stats(
         
         where_clause = " AND ".join(obs_filters)
         
-        # 1. Total diagnostics
+        # 1. Total diagnostics (filtré par utilisateur)
         total_diag = await conn.fetchval(f"""
             SELECT COUNT(DISTINCT d.id_diagnostic)
             FROM diagnostic d
@@ -40,23 +43,31 @@ async def get_stats(
             WHERE {where_clause}
         """, *params)
         
-        # 2. Total zones
-        total_zones = await conn.fetchval("SELECT COUNT(*) FROM zone_infectee")
+        # 2. Total zones (filtré par utilisateur via les parcelles)
+        total_zones = await conn.fetchval("""
+            SELECT COUNT(DISTINCT z.id_zone)
+            FROM zone_infectee z
+            JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+            WHERE p.id_utilisateur = $1
+        """, user_id)
         
-        # 3. Total parcelles
-        total_parcelles = await conn.fetchval("SELECT COUNT(*) FROM parcelle WHERE id_utilisateur = $1", user_id)
+        # 3. Total parcelles (filtré par utilisateur)
+        total_parcelles = await conn.fetchval("""
+            SELECT COUNT(*) FROM parcelle WHERE id_utilisateur = $1
+        """, user_id)
         
-        # 4. Taux infection moyen
+        # 4. Taux infection moyen (filtré par utilisateur)
         taux_moyen = await conn.fetchval(f"""
             SELECT 
                 CASE WHEN COUNT(*) > 0 
                 THEN SUM(CASE WHEN o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable') THEN 1 ELSE 0 END) * 100.0 / COUNT(*)
                 ELSE 0 END
-            FROM observation o
+            FROM diagnostic d
+            JOIN observation o ON d.id_diagnostic = o.id_diagnostic
             WHERE {where_clause}
         """, *params)
         
-        # 5. Répartition par maladie
+        # 5. Répartition par maladie (filtré par utilisateur)
         repartition = await conn.fetch(f"""
             SELECT 
                 CASE 
@@ -70,13 +81,14 @@ async def get_stats(
                 END as nom,
                 COUNT(*) as count,
                 ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as pourcentage
-            FROM observation o
+            FROM diagnostic d
+            JOIN observation o ON d.id_diagnostic = o.id_diagnostic
             WHERE {where_clause}
             GROUP BY o.maladie_nom
             ORDER BY count DESC
         """, *params)
         
-        # 6. Top zones avec filtres
+        # 6. Top zones (filtré par utilisateur)
         if maladie:
             top_zones = await conn.fetch(f"""
                 WITH zone_counts AS (
@@ -92,14 +104,15 @@ async def get_stats(
                         ST_SetSRID(ST_MakePoint(z.centre_longitude, z.centre_latitude), 4326)::geography,
                         z.rayon
                     )
-                    WHERE o.maladie_nom = $1
+                    LEFT JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
+                    WHERE d.id_utilisateur = $1 AND o.maladie_nom = $2
                     GROUP BY z.id_zone, z.nombre_observations, p.nom
                 )
                 SELECT id_zone, nombre_observations, parcelle_nom, maladie_count
                 FROM zone_counts
                 ORDER BY maladie_count DESC
                 LIMIT 5
-            """, maladie)
+            """, user_id, maladie)
             top_zones_clean = [{
                 "id_zone": z["id_zone"],
                 "nombre_observations": z["maladie_count"],
@@ -112,17 +125,18 @@ async def get_stats(
                     z.nombre_observations,
                     COALESCE(p.nom, 'Hors parcelle') as parcelle_nom
                 FROM zone_infectee z
-                LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+                JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+                WHERE p.id_utilisateur = $1
                 ORDER BY z.nombre_observations DESC
                 LIMIT 5
-            """)
+            """, user_id)
             top_zones_clean = [{
                 "id_zone": z["id_zone"],
                 "nombre_observations": z["nombre_observations"],
                 "parcelle_nom": z["parcelle_nom"]
             } for z in top_zones]
         
-        # 7. Top parcelles avec filtres
+        # 7. Top parcelles (filtré par utilisateur)
         if maladie:
             top_parcelles = await conn.fetch(f"""
                 SELECT 
@@ -133,6 +147,7 @@ async def get_stats(
                     ROUND(SUM(CASE WHEN o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable') THEN 1 ELSE 0 END) * 100.0 / COUNT(o.id_observation), 1) as taux_infection
                 FROM parcelle p
                 JOIN observation o ON o.id_parcelle = p.id_parcelle
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
                 WHERE p.id_utilisateur = $1 AND o.maladie_nom = $2
                 GROUP BY p.id_parcelle, p.nom
                 ORDER BY COUNT(o.id_observation) DESC
@@ -148,6 +163,7 @@ async def get_stats(
                     ROUND(SUM(CASE WHEN o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable') THEN 1 ELSE 0 END) * 100.0 / COUNT(o.id_observation), 1) as taux_infection
                 FROM parcelle p
                 JOIN observation o ON o.id_parcelle = p.id_parcelle
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
                 WHERE p.id_utilisateur = $1 AND p.id_parcelle = $2
                 GROUP BY p.id_parcelle, p.nom
                 LIMIT 5
@@ -162,6 +178,7 @@ async def get_stats(
                     ROUND(SUM(CASE WHEN o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable') THEN 1 ELSE 0 END) * 100.0 / COUNT(o.id_observation), 1) as taux_infection
                 FROM parcelle p
                 JOIN observation o ON o.id_parcelle = p.id_parcelle
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
                 WHERE p.id_utilisateur = $1
                 GROUP BY p.id_parcelle, p.nom
                 ORDER BY taux_infection DESC
@@ -181,17 +198,16 @@ async def get_stats(
             "top_parcelles": [dict(p) for p in top_parcelles]
         }
     except Exception as e:
-        print(f"Erreur: {e}")
+        print(f"Erreur dans /stats: {e}")
         raise
     finally:
         await conn.close()
 
 
 @router.get("/stats/zone/{id_zone}")
-async def get_zone_detail(id_zone: int):
+async def get_zone_detail(id_zone: int, user_id: int = Query(1)):
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
-        # 1. Récupérer les infos de la zone
         zone = await conn.fetchrow("""
             SELECT 
                 z.id_zone,
@@ -203,13 +219,12 @@ async def get_zone_detail(id_zone: int):
                 COALESCE(p.nom, 'Hors parcelle') as parcelle_nom
             FROM zone_infectee z
             LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
-            WHERE z.id_zone = $1
-        """, id_zone)
+            WHERE z.id_zone = $1 AND p.id_utilisateur = $2
+        """, id_zone, user_id)
         
         if not zone:
             return {"error": "Zone non trouvée"}
         
-        # 2. Récupérer la répartition des maladies dans cette zone
         maladies = await conn.fetch("""
             SELECT 
                 CASE 
@@ -224,16 +239,17 @@ async def get_zone_detail(id_zone: int):
                 COUNT(*) as count,
                 ROUND(COUNT(*) * 100.0 / $1, 1) as pourcentage
             FROM observation o
+            JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
             WHERE ST_DWithin(
                 ST_SetSRID(ST_MakePoint(o.longitude, o.latitude), 4326)::geography,
                 ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
                 1.0
             )
+            AND d.id_utilisateur = $4
             GROUP BY o.maladie_nom
             ORDER BY count DESC
-        """, zone["nombre_observations"], zone["centre_longitude"], zone["centre_latitude"])
+        """, zone["nombre_observations"], zone["centre_longitude"], zone["centre_latitude"], user_id)
         
-        # 3. Formatage de la réponse
         return {
             "id_zone": zone["id_zone"],
             "parcelle_id": zone["id_parcelle"],
@@ -241,15 +257,7 @@ async def get_zone_detail(id_zone: int):
             "total_observations": zone["nombre_observations"],
             "centre": {"lat": zone["centre_latitude"], "lon": zone["centre_longitude"]},
             "zone_type": zone["zone_type"],
-            "maladies": [
-                {
-                    "nom": m["nom"],
-                    "count": m["count"],
-                    "pourcentage": m["pourcentage"]
-                }
-                for m in maladies 
-                if m["nom"] and m["nom"] != "Inconnue" and m["count"] > 0
-            ]
+            "maladies": [{"nom": m["nom"], "count": m["count"], "pourcentage": m["pourcentage"]} for m in maladies if m["nom"] and m["nom"] != "Inconnue"]
         }
     except Exception as e:
         print(f"Erreur dans get_zone_detail: {e}")

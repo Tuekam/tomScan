@@ -1,5 +1,4 @@
 // screens/map_screen.dart
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -7,7 +6,8 @@ import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/auth_service.dart';
 
 class MapScreen extends StatefulWidget {
   final double? initialLatitude;
@@ -39,7 +39,6 @@ class _MapScreenState extends State<MapScreen>
   final List<Marker> _zoneMarkers = [];
   List<ZoneData> _zones = [];
   bool _isLoadingData = true;
-  bool _isLoadingLocation = true;
   String? _errorMessage;
 
   late AnimationController _animationController;
@@ -60,6 +59,9 @@ class _MapScreenState extends State<MapScreen>
 
   static const LatLng _defaultCenter = LatLng(4.051070, 9.767880);
 
+  // ID utilisateur connecté
+  int _userId = 1;
+
   @override
   void initState() {
     super.initState();
@@ -74,6 +76,36 @@ class _MapScreenState extends State<MapScreen>
       vsync: this,
     );
 
+    if (widget.highlightZoneId != null) {
+      _highlightMarker = Marker(
+        point: _initialCenter,
+        width: 80,
+        height: 80,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.blue.withValues(alpha: 0.3),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.blue, width: 3),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.withValues(alpha: 0.5),
+                blurRadius: 20,
+                spreadRadius: 5,
+              ),
+            ],
+          ),
+          child: const Center(
+            child: Icon(Icons.location_on, color: Colors.blue, size: 30),
+          ),
+        ),
+      );
+    }
+
+    _loadUserId();
+  }
+
+  Future<void> _loadUserId() async {
+    _userId = await AuthService().getUserId() ?? 1;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPermissionsAndLoad();
     });
@@ -88,11 +120,8 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _loadUserParcels() async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.get(
-        '${AppConfig.baseUrl}/parcelles?id_utilisateur=1',
+        '${AppConfig.baseUrl}/parcelles?id_utilisateur=$_userId',
       );
 
       if (response.statusCode == 200) {
@@ -115,7 +144,7 @@ class _MapScreenState extends State<MapScreen>
         setState(() {});
       }
     } catch (e) {
-      print('Erreur chargement parcelles: $e');
+      debugPrint('Erreur chargement parcelles: $e');
     }
   }
 
@@ -131,7 +160,7 @@ class _MapScreenState extends State<MapScreen>
     _parcelPolygons.add(
       Polygon(
         points: points,
-        color: Colors.red.withOpacity(0.15),
+        color: Colors.red.withValues(alpha: 0.15),
         borderColor: Colors.red,
         borderStrokeWidth: 2,
         isDotted: true,
@@ -163,7 +192,7 @@ class _MapScreenState extends State<MapScreen>
                       fontWeight: FontWeight.bold,
                       shadows: [
                         Shadow(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white.withValues(alpha: 0.9),
                           blurRadius: 3,
                           offset: const Offset(0, 0),
                         ),
@@ -178,7 +207,7 @@ class _MapScreenState extends State<MapScreen>
                       fontWeight: FontWeight.w600,
                       shadows: [
                         Shadow(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white.withValues(alpha: 0.9),
                           blurRadius: 3,
                         ),
                       ],
@@ -199,7 +228,6 @@ class _MapScreenState extends State<MapScreen>
       await _getUserLocation();
     } else {
       setState(() {
-        _isLoadingLocation = false;
         _errorMessage = 'Permission de localisation refusée';
       });
     }
@@ -211,25 +239,60 @@ class _MapScreenState extends State<MapScreen>
     setState(() {
       _isLoadingData = false;
     });
+
+    if (widget.highlightZoneId != null) {
+      final zone = _zones.firstWhere(
+        (z) => z.id == widget.highlightZoneId,
+        orElse: () => ZoneData(
+          id: -1,
+          latitude: 0.0,
+          longitude: 0.0,
+          rayon: 0.0,
+          nombreObservations: 0,
+          couleur: 'orange',
+          zoneType: 'HORS_PARCELLE',
+          parcelleNom: null,
+          popupText: '',
+        ),
+      );
+      if (zone.id != -1) {
+        Future.delayed(const Duration(milliseconds: 600), () {
+          _mapController.move(
+            LatLng(zone.latitude, zone.longitude),
+            18,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '📍 Zone #${zone.id} - ${zone.zoneType == "DANS_PARCELLE" ? "Dans parcelle" : "Hors parcelle"}',
+                ),
+                duration: const Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        });
+      }
+    }
   }
 
   Future<void> _getUserLocation() async {
     try {
-      setState(() {
-        _isLoadingLocation = true;
-      });
-
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         setState(() {
           _errorMessage = 'La localisation est désactivée';
-          _isLoadingLocation = false;
         });
         return;
       }
 
+      final locationSettings = const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+      );
+
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
+        locationSettings: locationSettings,
       );
 
       final userLatLng = LatLng(position.latitude, position.longitude);
@@ -242,12 +305,12 @@ class _MapScreenState extends State<MapScreen>
           height: 24,
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.4),
+              color: Colors.blue.withValues(alpha: 0.4),
               shape: BoxShape.circle,
               border: Border.all(color: Colors.white, width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.blue.withOpacity(0.3),
+                  color: Colors.blue.withValues(alpha: 0.3),
                   blurRadius: 8,
                   spreadRadius: 2,
                 ),
@@ -256,7 +319,6 @@ class _MapScreenState extends State<MapScreen>
             child: const Icon(Icons.my_location, color: Colors.blue, size: 14),
           ),
         );
-        _isLoadingLocation = false;
       });
 
       if (widget.initialLatitude == null) {
@@ -265,17 +327,17 @@ class _MapScreenState extends State<MapScreen>
     } catch (e) {
       setState(() {
         _errorMessage = 'Impossible d\'obtenir votre position: $e';
-        _isLoadingLocation = false;
       });
     }
   }
 
   Future<void> _loadZones() async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
-      final response = await _dio.get('${AppConfig.baseUrl}/zones');
+      // 🔥 Récupérer uniquement les zones liées aux parcelles de l'utilisateur
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/zones',
+        queryParameters: {'user_id': _userId},
+      );
 
       if (response.statusCode == 200) {
         final data = response.data;
@@ -340,7 +402,7 @@ class _MapScreenState extends State<MapScreen>
               LatLng(widget.initialLatitude!, widget.initialLongitude!),
               18,
             );
-            if (widget.highlightMaladie != null) {
+            if (widget.highlightMaladie != null && mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
@@ -375,12 +437,13 @@ class _MapScreenState extends State<MapScreen>
     double borderWidth;
 
     if (zone.zoneType == "DANS_PARCELLE") {
-      if (zone.couleur == 'red')
+      if (zone.couleur == 'red') {
         markerColor = Colors.red;
-      else if (zone.couleur == 'orange')
+      } else if (zone.couleur == 'orange') {
         markerColor = Colors.orange;
-      else
+      } else {
         markerColor = Colors.amber;
+      }
       opacity = 1.0;
       borderWidth = 3.0;
     } else if (zone.zoneType == "HORS_PARCELLE") {
@@ -403,11 +466,11 @@ class _MapScreenState extends State<MapScreen>
             scale: scale,
             child: Container(
               decoration: BoxDecoration(
-                color: markerColor.withOpacity(opacity),
+                color: markerColor.withValues(alpha: opacity),
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: markerColor.withOpacity(0.3),
+                    color: markerColor.withValues(alpha: 0.3),
                     blurRadius: 6,
                     spreadRadius: 1,
                   ),
@@ -434,11 +497,13 @@ class _MapScreenState extends State<MapScreen>
   Future<void> _centerOnUser() async {
     if (_userPosition != null) {
       _mapController.move(_userPosition!, 18);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Centrage sur votre position'),
-            duration: Duration(milliseconds: 800)),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Centrage sur votre position'),
+              duration: Duration(milliseconds: 800)),
+        );
+      }
     } else {
       final status = await Permission.location.request();
       if (status.isGranted) {
@@ -452,11 +517,13 @@ class _MapScreenState extends State<MapScreen>
       _isDrawingParcel = true;
       _parcelPoints.clear();
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Cliquez sur la carte pour ajouter des points'),
-          duration: Duration(seconds: 2)),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Cliquez sur la carte pour ajouter des points'),
+            duration: Duration(seconds: 2)),
+      );
+    }
   }
 
   void _addPointToParcel(LatLng point) {
@@ -468,11 +535,13 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _saveParcel() async {
     if (_parcelPoints.length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Une parcelle doit avoir au moins 3 points'),
-            backgroundColor: Colors.orange),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Une parcelle doit avoir au moins 3 points'),
+              backgroundColor: Colors.orange),
+        );
+      }
       return;
     }
 
@@ -485,12 +554,13 @@ class _MapScreenState extends State<MapScreen>
       final pointsForApi =
           _parcelPoints.map((p) => [p.latitude, p.longitude]).toList();
 
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.post(
         '${AppConfig.baseUrl}/parcelles',
-        data: {'nom': parcelName, 'points': pointsForApi, 'id_utilisateur': 1},
+        data: {
+          'nom': parcelName,
+          'points': pointsForApi,
+          'id_utilisateur': _userId
+        },
       );
 
       if (response.statusCode == 200) {
@@ -500,16 +570,20 @@ class _MapScreenState extends State<MapScreen>
           _isDrawingParcel = false;
           _parcelPoints.clear();
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Parcelle "$parcelName" créée !'),
-              backgroundColor: Colors.green),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('Parcelle "$parcelName" créée !'),
+                backgroundColor: Colors.green),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       setState(() => _isLoadingData = false);
     }
@@ -550,25 +624,24 @@ class _MapScreenState extends State<MapScreen>
   Future<void> _deleteParcel(int id, String nom) async {
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Supprimer la parcelle'),
-        content: Text('Voulez-vous vraiment supprimer la parcelle "$nom" ?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Non')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Oui')),
-        ],
-      ),
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          title: const Text('Supprimer la parcelle'),
+          content: Text('Voulez-vous vraiment supprimer la parcelle "$nom" ?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Non')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Oui')),
+          ],
+        );
+      },
     );
     if (confirm != true) return;
 
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       await _dio.delete('${AppConfig.baseUrl}/parcelles/$id');
       await _loadUserParcels();
       await _loadZones();
@@ -594,59 +667,61 @@ class _MapScreenState extends State<MapScreen>
       context: context,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.agriculture, color: Colors.red.shade700),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: Text(nom,
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.bold))),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _buildDetailRow(Icons.map, 'Points', '$pointsCount points'),
-            _buildDetailRow(Icons.square_foot, 'Surface',
-                '${surfaceHa.toStringAsFixed(2)} hectares'),
-            _buildDetailRow(Icons.landscape, 'Surface (m²)',
-                '${(surfaceHa * 10000).toStringAsFixed(0)} m²'),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _deleteParcel(id, nom),
-                    icon: const Icon(Icons.delete, color: Colors.red),
-                    label: const Text('Supprimer',
-                        style: TextStyle(color: Colors.red)),
-                    style: OutlinedButton.styleFrom(
-                        side: BorderSide(color: Colors.red.shade300)),
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.agriculture, color: Colors.red.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(nom,
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold))),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildDetailRow(Icons.map, 'Points', '$pointsCount points'),
+              _buildDetailRow(Icons.square_foot, 'Surface',
+                  '${surfaceHa.toStringAsFixed(2)} hectares'),
+              _buildDetailRow(Icons.landscape, 'Surface (m²)',
+                  '${(surfaceHa * 10000).toStringAsFixed(0)} m²'),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _deleteParcel(id, nom),
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      label: const Text('Supprimer',
+                          style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: Colors.red.shade300)),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _centerOnParcel(id);
-                    },
-                    icon: const Icon(Icons.center_focus_strong),
-                    label: const Text('Centrer'),
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _centerOnParcel(id);
+                      },
+                      icon: const Icon(Icons.center_focus_strong),
+                      label: const Text('Centrer'),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primary),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -677,56 +752,58 @@ class _MapScreenState extends State<MapScreen>
       context: context,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.warning_amber_rounded, color: couleur),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(titre,
-                          style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold)),
-                      if (sousTitre.isNotEmpty)
-                        Text(sousTitre,
-                            style: TextStyle(fontSize: 12, color: couleur)),
-                    ],
+      builder: (BuildContext context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: couleur),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(titre,
+                            style: const TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.bold)),
+                        if (sousTitre.isNotEmpty)
+                          Text(sousTitre,
+                              style: TextStyle(fontSize: 12, color: couleur)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              _buildDetailRow(Icons.people, 'Observations',
+                  '${zone.nombreObservations} observations'),
+              _buildDetailRow(Icons.circle, 'Rayon',
+                  '${zone.rayon.toStringAsFixed(1)} mètres'),
+              _buildDetailRow(Icons.info, 'Niveau', _getNiveauAlerte(zone)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _mapController.move(
+                        LatLng(zone.latitude, zone.longitude), 16);
+                  },
+                  icon: const Icon(Icons.center_focus_strong),
+                  label: const Text('Centrer la carte'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _buildDetailRow(Icons.people, 'Observations',
-                '${zone.nombreObservations} observations'),
-            _buildDetailRow(Icons.circle, 'Rayon',
-                '${zone.rayon.toStringAsFixed(1)} mètres'),
-            _buildDetailRow(Icons.info, 'Niveau', _getNiveauAlerte(zone)),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _mapController.move(
-                      LatLng(zone.latitude, zone.longitude), 16);
-                },
-                icon: const Icon(Icons.center_focus_strong),
-                label: const Text('Centrer la carte'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primary,
-                ),
               ),
-            ),
-          ],
-        ),
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -751,7 +828,7 @@ class _MapScreenState extends State<MapScreen>
       if (_isDrawingParcel && _parcelPoints.isNotEmpty)
         Polygon(
           points: _parcelPoints,
-          color: Colors.red.withOpacity(0.2),
+          color: Colors.red.withValues(alpha: 0.2),
           borderColor: Colors.red,
           borderStrokeWidth: 2.5,
           isDotted: true,
@@ -888,7 +965,7 @@ class _MapScreenState extends State<MapScreen>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
+                        color: Colors.red.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(
@@ -962,7 +1039,7 @@ class _MapScreenState extends State<MapScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.92),
+                color: Colors.white.withValues(alpha: 0.92),
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Column(
@@ -1030,7 +1107,7 @@ class _MapScreenState extends State<MapScreen>
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.85),
+                  color: Colors.white.withValues(alpha: 0.85),
                   borderRadius: BorderRadius.circular(12)),
               child: Row(
                 children: [
@@ -1051,48 +1128,50 @@ class _MapScreenState extends State<MapScreen>
   void _showLegendDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Légende'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildLegendItem(
-                Colors.red, 'Zone dans parcelle - Critique (≥20 obs)'),
-            const SizedBox(height: 8),
-            _buildLegendItem(
-                Colors.orange, 'Zone dans parcelle - Active (10-19 obs)'),
-            const SizedBox(height: 8),
-            _buildLegendItem(
-                Colors.amber, 'Zone dans parcelle - Émergente (<10 obs)'),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Container(
-                    width: 16,
-                    height: 16,
-                    decoration: const BoxDecoration(
-                        color: Colors.orange, shape: BoxShape.circle)),
-                const SizedBox(width: 8),
-                const Text('Zone hors parcelle (information)'),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Container(width: 16, height: 3, color: Colors.blue),
-                const SizedBox(width: 8),
-                const Text('Point de diagnostic récent'),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Divider(),
-            const Text(
-              'Appuyez sur ✏️ pour dessiner une parcelle',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-      ),
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Légende'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildLegendItem(
+                  Colors.red, 'Zone dans parcelle - Critique (≥20 obs)'),
+              const SizedBox(height: 8),
+              _buildLegendItem(
+                  Colors.orange, 'Zone dans parcelle - Active (10-19 obs)'),
+              const SizedBox(height: 8),
+              _buildLegendItem(
+                  Colors.amber, 'Zone dans parcelle - Émergente (<10 obs)'),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Container(
+                      width: 16,
+                      height: 16,
+                      decoration: const BoxDecoration(
+                          color: Colors.orange, shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                  const Text('Zone hors parcelle (information)'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Container(width: 16, height: 3, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  const Text('Point de diagnostic récent'),
+                ],
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              const Text(
+                'Appuyez sur ✏️ pour dessiner une parcelle',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

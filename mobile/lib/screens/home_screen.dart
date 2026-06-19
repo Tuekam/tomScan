@@ -4,7 +4,7 @@ import 'camera_screen.dart';
 import 'map_screen.dart';
 import 'history_screen.dart';
 import 'chatbot_screen.dart';
-import 'stats_screen.dart'; // ← Remplacer profile_screen par stats_screen
+import 'stats_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,7 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
     const MapScreen(),
     const HistoryScreen(),
     const ChatbotScreen(),
-    const StatsScreen(), // ← StatsScreen au lieu de ProfileScreen
+    const StatsScreen(),
   ];
 
   @override

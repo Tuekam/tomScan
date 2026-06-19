@@ -1,13 +1,13 @@
 # backend/app/api/routes/zones.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Query
 import asyncpg
 from app.core.config import settings
 
 router = APIRouter()
 
 @router.get("/zones")
-async def get_zones():
-    """Retourne toutes les zones infectées au format GeoJSON"""
+async def get_zones(user_id: int = Query(1)):
+    """Récupère les zones infectées associées aux parcelles de l'utilisateur"""
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         rows = await conn.fetch("""
@@ -21,23 +21,23 @@ async def get_zones():
                 z.id_parcelle,
                 p.nom as parcelle_nom
             FROM zone_infectee z
-            LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+            JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+            WHERE p.id_utilisateur = $1
             ORDER BY z.id_zone
-        """)
+        """, user_id)
         
         features = []
         for row in rows:
             zone_type = row['zone_type'] or "HORS_PARCELLE"
             nombre_obs = row['nombre_observations']
             
-            # Déterminer la couleur selon le type
             if zone_type == "HORS_PARCELLE":
                 couleur = "orange"
                 niveau = "Hors parcelle"
             elif zone_type == "MULTI_PARCELLES":
                 couleur = "red"
                 niveau = "Multi-parcelles"
-            else:  # DANS_PARCELLE
+            else:
                 if nombre_obs >= 20:
                     couleur = "red"
                     niveau = "Critique"
@@ -48,7 +48,6 @@ async def get_zones():
                     couleur = "yellow"
                     niveau = "Émergent"
             
-            # Construction du texte de l'info-bulle
             popup_text = f"Zone #{row['id_zone']} - {niveau}"
             if row['parcelle_nom']:
                 popup_text += f" - {row['parcelle_nom']}"

@@ -12,6 +12,8 @@ from app.api.routes import observations
 from app.api.routes import realtime# Dans main.py
 from app.api.routes import sessions
 from app.api.routes import history
+from app.api.routes import utilisateur
+from app.api.routes import auth
 
 
 app = FastAPI(title="TomScan API", version="1.0.0")
@@ -29,6 +31,9 @@ app.include_router(observations.router, prefix="/api", tags=["observations"])
 app.include_router(realtime.router, prefix="/api", tags=["realtime"])
 app.include_router(sessions.router, prefix="/api", tags=["sessions"])
 app.include_router(history.router, prefix="/api", tags=["history"])
+app.include_router(utilisateur.router, prefix="/api", tags=["utilisateur"])
+app.include_router(auth.router, prefix="/api", tags=["auth"])
+
 
 
 @app.get("/")

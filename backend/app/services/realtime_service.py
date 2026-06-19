@@ -4,12 +4,14 @@ import numpy as np
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
 from typing import List, Tuple
+from app.core.config import settings
 
 class RealtimeSession:
     """Gestion d'une session de scan temps réel"""
     
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, user_id: int = 1):
         self.session_id = session_id
+        self.user_id = user_id 
         self.start_time = datetime.now()
         self.last_frame_time = 0
         self.positions_scannees: List[Tuple[float, float, datetime]] = []
@@ -46,28 +48,46 @@ class RealtimeSession:
         except Exception:
             return 0
     
+    def get_rayon_dedoublonnage(self, precision_gps: float) -> float:
+        """
+        Retourne le rayon de dédoublonnage en fonction de la précision GPS.
+        Les valeurs sont centralisées dans settings.
+        """
+        if precision_gps <= 5.0:
+            return settings.RAYON_DEDOUBLONNAGE_GPS_PRECIS      # 0.5
+        elif precision_gps <= 15.0:
+            return settings.RAYON_DEDOUBLONNAGE_GPS_MOYEN       # 2.0
+        elif precision_gps <= 50.0:
+            return settings.RAYON_DEDOUBLONNAGE_GPS_IMPRECIS    # 5.0
+        else:
+            return settings.RAYON_DEDOUBLONNAGE_GPS_TRES_IMPRECIS  # 10.0
+    
     def doit_analyser_frame(self, lat: float, lon: float, current_time: float, 
-                            image_bytes: bytes, qualite_min: float = 20.0) -> Tuple[bool, str]:
+                            image_bytes: bytes, precision_gps: float = 5.0) -> Tuple[bool, str]:
         """
         Vérifie si une frame doit être analysée.
-        qualite_min réduite à 20 (au lieu de 30) pour être moins restrictif.
+        Utilise les seuils configurés dans settings.
         """
         self.total_frames += 1
         
-        # 1. Vérifier le taux (4 FPS max)
-        if current_time - self.last_frame_time < 0.25:
+        # 1. Vérifier le taux (FPS max)
+        intervalle_min = 1.0 / settings.FPS_CIBLE
+        if current_time - self.last_frame_time < intervalle_min:
             self.frames_ignored_rate += 1
             return False, "rate_limit"
         
-        # 2. Vérifier la qualité de l'image (moins restrictif)
+        # 2. Vérifier la qualité de l'image
         qualite = self.qualite_image(image_bytes)
-        if qualite < qualite_min:
+        if qualite < settings.QUALITE_IMAGE_MIN:
             self.frames_ignored_quality += 1
             return False, "poor_quality"
         
-        # 3. Vérifier si la position a déjà été scannée (rayon 0.5m)
+        # 3. Vérifier si la position a déjà été scannée
+        rayon = self.get_rayon_dedoublonnage(precision_gps)
+        
         for (lat2, lon2, _) in self.positions_scannees:
-            if self.distance_en_metres(lat, lon, lat2, lon2) <= 0.5:
+            distance = self.distance_en_metres(lat, lon, lat2, lon2)
+            if distance <= rayon:
                 self.frames_ignored_gps += 1
                 return False, "already_scanned"
         
@@ -140,12 +160,12 @@ class RealtimeSession:
                 if self.distance_en_metres(
                     obs["latitude"], obs["longitude"],
                     observations_restantes[i]["latitude"], observations_restantes[i]["longitude"]
-                ) <= 1.0:
+                ) <= settings.RAYON_GROUPEMENT_M:
                     groupe.append(observations_restantes.pop(i))
                 else:
                     i += 1
             
-            if len(groupe) >= 10:
+            if len(groupe) >= settings.SEUIL_CREATION_ZONE:
                 centre_lat = sum(o["latitude"] for o in groupe) / len(groupe)
                 centre_lon = sum(o["longitude"] for o in groupe) / len(groupe)
                 maladies = {}

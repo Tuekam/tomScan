@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/auth_service.dart'; // ← AJOUT
 
 class ChatbotScreen extends StatefulWidget {
   final String? initialQuestion;
@@ -24,9 +25,17 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   bool _isSending = false;
   bool _isInitializing = true;
 
+  // ID de l'utilisateur connecté
+  int? _userId;
+
   @override
   void initState() {
     super.initState();
+    _loadUserId();
+  }
+
+  Future<void> _loadUserId() async {
+    _userId = await AuthService().getUserId();
     _loadConversations().then((_) {
       setState(() => _isInitializing = false);
       if (widget.initialQuestion != null &&
@@ -45,11 +54,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
   Future<void> _loadConversations() async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
-      final response =
-          await _dio.get('${AppConfig.baseUrl}/conversations?user_id=1');
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/conversations?user_id=${_userId ?? 1}',
+      );
       if (response.statusCode == 200) {
         final data = response.data as List;
         setState(() {
@@ -75,7 +82,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     if (sujet == null) return;
     try {
       final response = await _dio.post(
-        '${AppConfig.baseUrl}/conversations?user_id=1',
+        '${AppConfig.baseUrl}/conversations?user_id=${_userId ?? 1}',
         data: {'sujet': sujet},
       );
       if (response.statusCode == 200) {

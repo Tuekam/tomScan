@@ -1,10 +1,13 @@
 # backend/app/services/realtime_service.py
 import cv2
 import numpy as np
+import asyncpg
+from app.core.config import settings
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
 from typing import List, Tuple
 from app.core.config import settings
+
 
 class RealtimeSession:
     """Gestion d'une session de scan temps réel"""
@@ -186,4 +189,26 @@ class RealtimeSession:
                     "maladies": maladies
                 })
         
-        return groupes
+        return 
+    
+
+async def creer_notification(
+    id_utilisateur: int,
+    titre: str,
+    message: str,
+    type: str,
+    id_zone: int = None,
+    id_parcelle: int = None,
+    latitude: float = None,
+    longitude: float = None
+):
+    """Crée une notification pour l'utilisateur"""
+    conn = await asyncpg.connect(settings.DATABASE_URL)
+    try:
+        await conn.execute("""
+            INSERT INTO notification 
+                (id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+    finally:
+        await conn.close()

@@ -2,7 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/auth_service.dart';
 import 'result_screen.dart';
 import 'realtime_result_screen.dart';
 import 'map_screen.dart';
@@ -19,6 +20,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _items = [];
   bool _isLoading = true;
   String? _error;
+  int? _userId;
 
   // Filtres
   String _selectedFilterType = 'tous';
@@ -30,15 +32,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   void initState() {
     super.initState();
+    _loadUserId();
     _loadMaladies();
     _loadHistory();
   }
 
+  Future<void> _loadUserId() async {
+    _userId = await AuthService().getUserId();
+  }
+
   Future<void> _loadMaladies() async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.get('${AppConfig.baseUrl}/maladies');
       if (response.statusCode == 200) {
         setState(() {
@@ -56,8 +60,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
       _error = null;
     });
     try {
+      final userId = await AuthService().getUserId() ?? 1;
       final queryParams = <String, dynamic>{
-        'user_id': 1,
+        'user_id': userId,
         'limit': 50,
       };
 
@@ -77,11 +82,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
         queryParams['date_fin'] = _endDate!.toIso8601String().split('T')[0];
       }
 
-      print('🔍 Filtres appliqués: $queryParams');
-
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.get(
         '${AppConfig.baseUrl}/history',
         queryParameters: queryParams,
@@ -89,14 +89,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       if (response.statusCode == 200) {
         final data = response.data;
-        print('📊 Résultats: ${data['total']} éléments trouvés');
         setState(() {
           _items = List<Map<String, dynamic>>.from(data['items']);
           _isLoading = false;
         });
       }
     } catch (e) {
-      print('❌ Erreur chargement: $e');
       setState(() {
         _error = e.toString();
         _isLoading = false;
@@ -166,15 +164,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     try {
       final endpoint = item['type'] == 'photo'
-          ? '/api/diagnostics/${item['id']}'
-          : '/api/sessions/${item['id']}';
-      // ============================================================
-      // URL centralisée
-      // ============================================================
+          ? '/diagnostics/${item['id']}'
+          : '/sessions/${item['id']}';
+
       await _dio.delete('${AppConfig.baseUrl}$endpoint');
+
       setState(() {
         _items.removeWhere((e) => e['id'] == item['id']);
       });
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -474,12 +472,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       itemBuilder: (context, index) {
                         final item = _items[index];
                         final type = item['type'] ?? 'photo';
-
-                        if (type == 'photo') {
-                          return _buildPhotoItem(item);
-                        } else {
-                          return _buildRealtimeItem(item);
-                        }
+                        return type == 'photo'
+                            ? _buildPhotoItem(item)
+                            : _buildRealtimeItem(item);
                       },
                     ),
     );
@@ -634,7 +629,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final duree = _formatDuration(item['duree_secondes'] ?? 0);
     final zones = item['zones_crees'] ?? 0;
     final frames = item['total_frames'] ?? 0;
-    final maladies = item['maladies_stats'] as Map<String, dynamic>?;
+    final analysees = item['frames_analysees'] ?? 0;
+    final taux =
+        frames > 0 ? (analysees / frames * 100).toStringAsFixed(1) : '0.0';
+
+    final resumeData = item['resume'] as Map<String, dynamic>? ?? {};
+    final maladies = resumeData['maladies_stats'] as Map<String, dynamic>?;
     final maladieNames = maladies?.keys.join(', ') ?? 'Aucune maladie';
 
     return Card(
@@ -646,13 +646,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ),
       child: InkWell(
         onTap: () {
+          // Construire l'objet complet pour le résumé
+          final fullData = {
+            'total_frames': item['total_frames'] ?? 0,
+            'frames_analysees': item['frames_analysees'] ?? 0,
+            'duree_secondes': item['duree_secondes'] ?? 0,
+            'maladies_stats': resumeData['maladies_stats'] ?? {},
+            'total_observations': resumeData['total_observations'] ?? 0,
+            'zones': resumeData['zones'] ?? [],
+          };
+
           Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => RealtimeResultScreen(
-                resume: item['resume'] ?? {},
-                zones: List<Map<String, dynamic>>.from(
-                    item['resume']?['zones'] ?? []),
+                resume: fullData,
+                zones: List<Map<String, dynamic>>.from(fullData['zones'] ?? []),
                 sessionId: item['id'],
               ),
             ),
@@ -737,6 +746,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 children: [
                   _buildInfoChip(Icons.timer, '$duree'),
                   _buildInfoChip(Icons.camera_alt, '$frames'),
+                  _buildInfoChip(Icons.check_circle, '$analysees'),
+                  _buildInfoChip(Icons.percent, '$taux%'),
                   _buildInfoChip(Icons.location_on, '$zones'),
                 ],
               ),

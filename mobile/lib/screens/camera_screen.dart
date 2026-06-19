@@ -8,11 +8,14 @@ import 'package:dio/dio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
 import 'result_screen.dart';
 import 'map_screen.dart';
 import 'realtime_scan_screen.dart';
 import 'chatbot_screen.dart';
+import 'profile_screen.dart';
+import 'notifications_screen.dart';
+import '../services/auth_service.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -149,19 +152,20 @@ class _CameraScreenState extends State<CameraScreen> {
       final lat = position?.latitude ?? 0.0;
       final lon = position?.longitude ?? 0.0;
 
+      final userId = await AuthService().getUserId() ?? 1;
+
+      // 🔥 CORRECTION : user_id doit être dans le body, pas dans l'URL
       final formData = FormData.fromMap({
         'image': await MultipartFile.fromFile(_image!.path),
         'latitude': lat,
         'longitude': lon,
         'precision_gps': position?.accuracy ?? 5.0,
+        'id_utilisateur': userId, // ← Ajout de l'ID utilisateur dans le body
       });
 
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.post(
         '${AppConfig.baseUrl}/predict',
-        data: formData,
+        data: formData, // ← Plus de queryParameters
       );
 
       final data = response.data;
@@ -350,14 +354,30 @@ class _CameraScreenState extends State<CameraScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         actions: [
+          // Notifications
           IconButton(
             icon: const Icon(Icons.notifications_none),
-            onPressed: () {},
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const NotificationsScreen(),
+                ),
+              );
+            },
             color: AppTheme.primary,
           ),
+          // Profil
           IconButton(
             icon: const Icon(Icons.person_outline),
-            onPressed: () {},
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ProfileScreen(),
+                ),
+              );
+            },
             color: AppTheme.primary,
           ),
         ],

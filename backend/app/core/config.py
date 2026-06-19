@@ -39,5 +39,12 @@ class Settings:
     
     # Upload
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "uploads")
+    
+    # ============================================================
+    # AJOUT : JWT pour l'authentification
+    # ============================================================
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "tomscan_secret_key_2026_change_this_in_production")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_EXPIRATION_DAYS: int = int(os.getenv("JWT_EXPIRATION_DAYS", "7"))
 
 settings = Settings()

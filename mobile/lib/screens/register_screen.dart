@@ -1,0 +1,390 @@
+// screens/register_screen.dart
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../theme.dart';
+import '../config.dart';
+import '../services/auth_service.dart';
+import 'login_screen.dart';
+import 'home_screen.dart';
+
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
+
+  @override
+  State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+class _RegisterScreenState extends State<RegisterScreen> {
+  final Dio _dio = Dio();
+  final _nomController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  final _telephoneController = TextEditingController();
+  final _adresseController = TextEditingController();
+  bool _isLoading = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
+  String? _errorMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 380;
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+            horizontal: isSmallScreen ? 20 : 32,
+            vertical: 16,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(height: screenHeight * 0.02),
+              // Logo + Titre
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      Icons.eco,
+                      size: isSmallScreen ? 28 : 32,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'TomScan',
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 24 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textDark,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Créez votre compte agriculteur',
+                style: TextStyle(
+                  fontSize: isSmallScreen ? 13 : 15,
+                  color: AppTheme.textMedium,
+                ),
+              ),
+              SizedBox(height: screenHeight * 0.04),
+              // Erreur
+              if (_errorMessage != null)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: AppTheme.danger.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.error_outline,
+                          color: AppTheme.danger, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: TextStyle(
+                            color: AppTheme.danger,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              // Nom complet
+              _buildTextField(
+                controller: _nomController,
+                label: 'Nom complet',
+                hint: 'Jules TUEKAM',
+                icon: Icons.person_outline,
+              ),
+              const SizedBox(height: 20),
+              // Email
+              _buildTextField(
+                controller: _emailController,
+                label: 'Adresse email',
+                hint: 'jules@tomscan.com',
+                icon: Icons.email_outlined,
+                keyboardType: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 20),
+              // Téléphone
+              _buildTextField(
+                controller: _telephoneController,
+                label: 'Téléphone',
+                hint: '691 234 567',
+                icon: Icons.phone_outlined,
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 20),
+              // Adresse
+              _buildTextField(
+                controller: _adresseController,
+                label: 'Adresse (optionnel)',
+                hint: 'Douala, Cameroun',
+                icon: Icons.location_on_outlined,
+              ),
+              const SizedBox(height: 20),
+              // Mot de passe
+              _buildTextField(
+                controller: _passwordController,
+                label: 'Mot de passe',
+                hint: '••••••••',
+                icon: Icons.lock_outline,
+                obscureText: _obscurePassword,
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: AppTheme.textLight,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscurePassword = !_obscurePassword;
+                    });
+                  },
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Confirmation mot de passe
+              _buildTextField(
+                controller: _confirmPasswordController,
+                label: 'Confirmer le mot de passe',
+                hint: '••••••••',
+                icon: Icons.lock_outline,
+                obscureText: _obscureConfirmPassword,
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureConfirmPassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: AppTheme.textLight,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscureConfirmPassword = !_obscureConfirmPassword;
+                    });
+                  },
+                ),
+              ),
+              SizedBox(height: screenHeight * 0.04),
+              // Bouton S'inscrire
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _register,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'S\'inscrire',
+                          style: TextStyle(
+                            fontSize: isSmallScreen ? 14 : 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              // Lien vers connexion
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'Déjà un compte ?',
+                    style: TextStyle(
+                      fontSize: isSmallScreen ? 13 : 14,
+                      color: AppTheme.textMedium,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const LoginScreen(),
+                        ),
+                      );
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      'Se connecter',
+                      style: TextStyle(
+                        fontSize: isSmallScreen ? 13 : 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: screenHeight * 0.02),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required IconData icon,
+    bool obscureText = false,
+    Widget? suffixIcon,
+    TextInputType keyboardType = TextInputType.text,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: AppTheme.textDark,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(color: AppTheme.textLight),
+            prefixIcon: Icon(icon, color: AppTheme.textLight),
+            suffixIcon: suffixIcon,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey.shade200),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppTheme.primary, width: 1.5),
+            ),
+            filled: true,
+            fillColor: AppTheme.background,
+            contentPadding:
+                const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _register() async {
+    // Validation
+    if (_nomController.text.trim().isEmpty) {
+      setState(() => _errorMessage = 'Veuillez entrer votre nom');
+      return;
+    }
+    if (_emailController.text.trim().isEmpty) {
+      setState(() => _errorMessage = 'Veuillez entrer votre email');
+      return;
+    }
+    if (_passwordController.text.length < 6) {
+      setState(() =>
+          _errorMessage = 'Le mot de passe doit faire au moins 6 caractères');
+      return;
+    }
+    if (_passwordController.text != _confirmPasswordController.text) {
+      setState(() => _errorMessage = 'Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final response = await _dio.post(
+        '${AppConfig.baseUrl}/auth/register',
+        data: {
+          'nom': _nomController.text.trim(),
+          'email': _emailController.text.trim(),
+          'mot_de_passe': _passwordController.text,
+          'telephone': _telephoneController.text.trim(),
+          'adresse': _adresseController.text.trim(),
+          'role': 'agriculteur',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+
+        // ✅ Utiliser AuthService pour sauvegarder les données
+        await AuthService().saveUserData(
+          token: data['token'],
+          userId: data['id_utilisateur'],
+          nom: data['nom'],
+          email: data['email'],
+          role: data['role'] ?? 'agriculteur',
+        );
+
+        if (!mounted) return;
+
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const HomeScreen(),
+          ),
+        );
+      }
+    } on DioException catch (e) {
+      setState(() {
+        _errorMessage =
+            e.response?.data['detail'] ?? 'Erreur lors de l\'inscription';
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Une erreur est survenue';
+        _isLoading = false;
+      });
+    }
+  }
+}

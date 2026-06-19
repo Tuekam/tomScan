@@ -1,6 +1,7 @@
 // screens/realtime_result_screen.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../services/auth_service.dart';
 import 'map_screen.dart';
 
 class RealtimeResultScreen extends StatelessWidget {
@@ -17,6 +18,14 @@ class RealtimeResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Récupération des valeurs depuis resume
+    final totalFrames = resume['total_frames'] ?? 0;
+    final framesAnalysees = resume['frames_analysees'] ?? 0;
+    final dureeSecondes = resume['duree_secondes'] ?? 0;
+    final taux = totalFrames > 0
+        ? (framesAnalysees / totalFrames * 100).toStringAsFixed(1)
+        : '0.0';
+
     final maladiesStats = Map<String, int>.from(resume['maladies_stats'] ?? {});
     final totalObs = resume['total_observations'] ?? 0;
     final sortedMaladies = maladiesStats.entries.toList()
@@ -56,7 +65,7 @@ class RealtimeResultScreen extends StatelessWidget {
                             fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        'Durée: ${(resume['duree_secondes'] ?? 0).toStringAsFixed(1)} secondes',
+                        'Durée: ${dureeSecondes.toStringAsFixed(1)} secondes',
                         style: TextStyle(color: Colors.grey),
                       ),
                     ],
@@ -72,19 +81,19 @@ class RealtimeResultScreen extends StatelessWidget {
                 _buildKpiCard(
                   Icons.camera_alt,
                   'Frames totales',
-                  '${resume['total_frames'] ?? 0}',
+                  '$totalFrames',
                 ),
                 const SizedBox(width: 12),
                 _buildKpiCard(
                   Icons.check_circle,
                   'Analysées',
-                  '${resume['frames_analysees'] ?? 0}',
+                  '$framesAnalysees',
                 ),
                 const SizedBox(width: 12),
                 _buildKpiCard(
                   Icons.percent,
                   'Taux',
-                  '${resume['taux_analyse'] ?? 0}%',
+                  '$taux%',
                 ),
               ],
             ),
@@ -295,8 +304,14 @@ class RealtimeResultScreen extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () =>
-                    Navigator.popUntil(context, (route) => route.isFirst),
+                onPressed: () {
+                  // Retourner à la page d'accueil avec l'utilisateur connecté
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    '/home',
+                    (route) => false,
+                  );
+                },
                 icon: const Icon(Icons.home),
                 label: const Text('Retour à l\'accueil'),
               ),
@@ -320,11 +335,13 @@ class RealtimeResultScreen extends StatelessWidget {
           children: [
             Icon(icon, size: 20, color: AppTheme.primary),
             const SizedBox(height: 4),
-            Text(value,
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.primary)),
+            Text(
+              value,
+              style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.primary),
+            ),
             Text(label,
                 style: const TextStyle(fontSize: 10, color: Colors.grey)),
           ],

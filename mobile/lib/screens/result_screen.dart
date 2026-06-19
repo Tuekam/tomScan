@@ -2,7 +2,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/auth_service.dart';
+import 'map_screen.dart';
+import 'chatbot_screen.dart';
 
 class ResultScreen extends StatelessWidget {
   final String imagePath;
@@ -76,9 +79,6 @@ class ResultScreen extends StatelessWidget {
     }
   }
 
-  // ============================================================
-  // URL centralisée pour les images
-  // ============================================================
   String _getRemoteImageUrl() {
     if (imagePath.isEmpty) return '';
     final fileName = imagePath.split('/').last;
@@ -401,14 +401,10 @@ class ResultScreen extends StatelessWidget {
 
             // ---------- Boutons d'action ----------
             ElevatedButton.icon(
-              onPressed: () => Navigator.pop(context, {
-                'action': 'view_on_map',
-                'latitude': latitude,
-                'longitude': longitude,
-                'id_diagnostic': idDiagnostic,
-                'maladie': maladie,
-                'confiance': confiance,
-              }),
+              onPressed: () {
+                // Récupérer l'ID de l'utilisateur connecté pour la carte
+                _navigateToMap(context);
+              },
               icon: const Icon(Icons.map),
               label: const Text('Voir sur la carte'),
               style: ElevatedButton.styleFrom(
@@ -420,12 +416,14 @@ class ResultScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: () => Navigator.pop(context, {
-                'action': 'ask_chatbot',
-                'maladie': maladie,
-                'question':
-                    'Je viens de diagnostiquer $maladieName sur mes tomates. Que dois-je faire ?',
-              }),
+              onPressed: () {
+                Navigator.pop(context, {
+                  'action': 'ask_chatbot',
+                  'maladie': maladie,
+                  'question':
+                      'Je viens de diagnostiquer $maladieName sur mes tomates. Que dois-je faire ?',
+                });
+              },
               icon: const Icon(Icons.chat_bubble_outline),
               label: const Text('Poser une question'),
               style: OutlinedButton.styleFrom(
@@ -447,5 +445,20 @@ class ResultScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  void _navigateToMap(BuildContext context) async {
+    // Récupérer l'ID de l'utilisateur connecté
+    final userId = await AuthService().getUserId();
+
+    Navigator.pop(context, {
+      'action': 'view_on_map',
+      'latitude': latitude,
+      'longitude': longitude,
+      'id_diagnostic': idDiagnostic,
+      'maladie': maladie,
+      'confiance': confiance,
+      'user_id': userId ?? 1,
+    });
   }
 }

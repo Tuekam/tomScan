@@ -7,7 +7,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:dio/dio.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/gps_service.dart';
+import '../services/auth_service.dart';
 import 'realtime_result_screen.dart';
 
 enum GpsStatus { waiting, ready, error }
@@ -42,17 +44,46 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
   double _gpsAccuracy = 0.0;
   bool _isWaitingGps = true;
 
-  // ============================================================
-  // Utilisation des valeurs de AppConfig
-  // ============================================================
   final int _fps = AppConfig.fpsCible;
   final Duration _frameInterval =
-      Duration(milliseconds: 1000 ~/ AppConfig.fpsCible);
+      Duration(milliseconds: (1000 ~/ AppConfig.fpsCible));
+  final String _baseUrl = AppConfig.baseUrl;
+  final double _gpsPrecisionSeuil = AppConfig.gpsPrecisionSeuil;
+
+  // GPS Service listener
+  late void Function(Position) _gpsListener;
 
   @override
   void initState() {
     super.initState();
     _initCamera();
+
+    // S'abonner aux mises à jour GPS
+    _gpsListener = (Position position) {
+      if (!mounted) return;
+      final accuracy = position.accuracy;
+      setState(() {
+        _gpsAccuracy = accuracy;
+        if (accuracy <= _gpsPrecisionSeuil && _gpsStatus == GpsStatus.waiting) {
+          _gpsStatus = GpsStatus.ready;
+          _isWaitingGps = false;
+          print('📍 GPS stabilisé à ${accuracy.toStringAsFixed(1)}m');
+        }
+      });
+    };
+    GpsService().addListener(_gpsListener);
+
+    // Vérifier l'état initial du GPS
+    final currentPos = GpsService().currentPosition;
+    if (currentPos != null && currentPos.accuracy <= _gpsPrecisionSeuil) {
+      setState(() {
+        _gpsAccuracy = currentPos.accuracy;
+        _gpsStatus = GpsStatus.ready;
+        _isWaitingGps = false;
+        print(
+            '📍 GPS déjà stabilisé à ${currentPos.accuracy.toStringAsFixed(1)}m');
+      });
+    }
   }
 
   @override
@@ -60,6 +91,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
     _frameTimer?.cancel();
     _statusTimer?.cancel();
     _cameraController?.dispose();
+    GpsService().removeListener(_gpsListener);
     super.dispose();
   }
 
@@ -89,8 +121,6 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       setState(() {
         _isInitialized = true;
       });
-
-      _waitForGpsFix();
     } catch (e) {
       print('Erreur caméra: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -101,62 +131,10 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
   }
 
   // ============================================================
-  // GPS : Attendre une précision stable
-  // ============================================================
-  Future<void> _waitForGpsFix() async {
-    setState(() {
-      _isWaitingGps = true;
-      _gpsStatus = GpsStatus.waiting;
-      _gpsAccuracy = 0.0;
-    });
-
-    int attempts = 0;
-    const maxAttempts = 30; // 30 * 2s = 60 secondes max
-
-    while (attempts < maxAttempts && _isWaitingGps) {
-      attempts++;
-
-      try {
-        final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.best,
-          timeLimit: const Duration(seconds: 5),
-        );
-
-        _gpsAccuracy = position.accuracy;
-
-        print('📍 GPS: précision=${position.accuracy.toStringAsFixed(1)}m, ' +
-            'source=${position.isMocked ? "mock" : "satellite"}');
-
-        // ============================================================
-        // Seuil de précision GPS centralisé
-        // ============================================================
-        if (position.accuracy <= AppConfig.gpsPrecisionSeuil) {
-          setState(() {
-            _gpsStatus = GpsStatus.ready;
-            _gpsAccuracy = position.accuracy;
-            _isWaitingGps = false;
-          });
-          return;
-        }
-
-        setState(() {});
-      } catch (e) {
-        print('Erreur GPS: $e');
-      }
-
-      await Future.delayed(const Duration(seconds: 2));
-    }
-
-    setState(() {
-      _gpsStatus = GpsStatus.error;
-      _isWaitingGps = false;
-    });
-  }
-
-  // ============================================================
   // Démarrer le scan
   // ============================================================
   Future<void> _startScan() async {
+    // Vérifier les permissions
     final status = await Permission.camera.request();
     if (!status.isGranted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -168,6 +146,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       return;
     }
 
+    // Vérifier que le GPS est prêt
     if (_gpsStatus != GpsStatus.ready) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -189,10 +168,13 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
     });
 
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
-      final startRes = await _dio.post('${AppConfig.baseUrl}/realtime/start');
+      // Récupérer l'ID de l'utilisateur connecté
+      final userId = await AuthService().getUserId();
+
+      final startRes = await _dio.post(
+        '$_baseUrl/realtime/start',
+        queryParameters: {'user_id': userId ?? 1},
+      );
       _sessionId = startRes.data['session_id'];
       print('🎬 Session temps réel démarrée: $_sessionId');
 
@@ -222,7 +204,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       final image = await _cameraController!.takePicture();
       _totalFrames++;
 
-      final position = await _getCurrentLocation();
+      // Utiliser le GPS Service au lieu de faire un appel direct
+      final position = GpsService().currentPosition;
       final lat = position?.latitude ?? 0.0;
       final lon = position?.longitude ?? 0.0;
       final accuracy = position?.accuracy ?? 5.0;
@@ -234,11 +217,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
         'precision_gps': accuracy,
       });
 
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.post(
-        '${AppConfig.baseUrl}/realtime/$_sessionId/frame',
+        '$_baseUrl/realtime/$_sessionId/frame',
         data: formData,
       );
 
@@ -249,6 +229,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
         final maladie = data['maladie'] ?? 'Inconnue';
         _maladiesCount[maladie] = (_maladiesCount[maladie] ?? 0) + 1;
 
+        // Mettre à jour les détections
         if (data['detections'] != null) {
           final detections = (data['detections'] as List)
               .map((d) => Detection(
@@ -269,34 +250,22 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
         _ignoredFrames++;
       }
 
+      // Mise à jour de l'UI
       if (mounted) {
         setState(() {});
       }
 
+      // Supprimer le fichier temporaire
       await File(image.path).delete();
     } catch (e) {
       print('Erreur capture frame: $e');
     }
   }
 
-  Future<Position?> _getCurrentLocation() async {
-    try {
-      return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-      );
-    } catch (e) {
-      return null;
-    }
-  }
-
   Future<void> _updateStatus() async {
     if (_sessionId.isEmpty) return;
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
-      final response =
-          await _dio.get('${AppConfig.baseUrl}/realtime/$_sessionId/status');
+      final response = await _dio.get('$_baseUrl/realtime/$_sessionId/status');
       final data = response.data;
       setState(() {
         _totalFrames = data['total_frames'] ?? _totalFrames;
@@ -313,11 +282,9 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
     setState(() => _isScanning = false);
 
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
-      final response =
-          await _dio.post('${AppConfig.baseUrl}/realtime/$_sessionId/end');
+      final response = await _dio.post(
+        '$_baseUrl/realtime/$_sessionId/end',
+      );
       final data = response.data;
       if (data['status'] == 'completed' && mounted) {
         Navigator.pushReplacement(
@@ -378,6 +345,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
   }
 
   Widget _buildBody() {
+    // Cas 1 : Caméra non initialisée
     if (!_isInitialized) {
       return const Center(
         child: Column(
@@ -391,14 +359,17 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       );
     }
 
+    // Cas 2 : Attente GPS
     if (_isWaitingGps) {
       return _buildGpsWaitingScreen();
     }
 
+    // Cas 3 : GPS en erreur
     if (_gpsStatus == GpsStatus.error) {
       return _buildGpsErrorScreen();
     }
 
+    // Cas 4 : Scan en cours ou prêt
     return _buildScanScreen();
   }
 
@@ -412,7 +383,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
             Icon(
               Icons.gps_fixed,
               size: 64,
-              color: _gpsAccuracy <= AppConfig.gpsPrecisionSeuil
+              color: _gpsAccuracy <= _gpsPrecisionSeuil
                   ? Colors.green
                   : Colors.orange,
             ),
@@ -426,7 +397,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
               'Précision: ${_gpsAccuracy.toStringAsFixed(1)} m',
               style: TextStyle(
                 fontSize: 14,
-                color: _gpsAccuracy <= AppConfig.gpsPrecisionSeuil
+                color: _gpsAccuracy <= _gpsPrecisionSeuil
                     ? Colors.green
                     : Colors.orange,
                 fontWeight: FontWeight.w500,
@@ -434,12 +405,12 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              _gpsAccuracy <= AppConfig.gpsPrecisionSeuil
+              _gpsAccuracy <= _gpsPrecisionSeuil
                   ? '✅ Signal suffisant'
                   : '⏳ Attendez la stabilisation...',
               style: TextStyle(
                 fontSize: 13,
-                color: _gpsAccuracy <= AppConfig.gpsPrecisionSeuil
+                color: _gpsAccuracy <= _gpsPrecisionSeuil
                     ? Colors.green
                     : Colors.grey,
               ),
@@ -488,7 +459,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
                   _isWaitingGps = true;
                   _gpsStatus = GpsStatus.waiting;
                 });
-                _waitForGpsFix();
+                // Forcer une mise à jour du GPS
+                GpsService().startGpsService();
               },
               icon: const Icon(Icons.refresh),
               label: const Text('Réessayer'),
@@ -507,11 +479,13 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
   Widget _buildScanScreen() {
     return Column(
       children: [
+        // Vue caméra avec bounding boxes
         Expanded(
           flex: 3,
           child: Stack(
             children: [
               CameraPreview(_cameraController!),
+              // Bounding boxes
               if (_detections.isNotEmpty)
                 ..._detections.map((detection) {
                   final size = MediaQuery.of(context).size;
@@ -550,6 +524,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
                     ),
                   );
                 }),
+              // Indicateur de scan
               if (_isScanning)
                 Positioned(
                   top: 8,
@@ -578,34 +553,44 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
                     ),
                   ),
                 ),
-              if (_gpsAccuracy > 0)
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.6),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.gps_fixed, color: Colors.green, size: 12),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${_gpsAccuracy.toStringAsFixed(1)}m',
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 10),
-                        ),
-                      ],
-                    ),
+              // GPS précis
+              Positioned(
+                top: 8,
+                left: 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _gpsAccuracy <= _gpsPrecisionSeuil
+                            ? Icons.gps_fixed
+                            : Icons.gps_off,
+                        color: _gpsAccuracy <= _gpsPrecisionSeuil
+                            ? Colors.green
+                            : Colors.red,
+                        size: 12,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${_gpsAccuracy.toStringAsFixed(1)}m',
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 10),
+                      ),
+                    ],
                   ),
                 ),
+              ),
             ],
           ),
         ),
+
+        // Barre d'information
         Container(
           padding: const EdgeInsets.all(12),
           color: Colors.white,
@@ -625,6 +610,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
             ],
           ),
         ),
+
+        // Maladies détectées
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.grey.shade50,
@@ -650,6 +637,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
             ),
           ),
         ),
+
+        // Bouton Démarrer/Arrêter
         Padding(
           padding: const EdgeInsets.all(12),
           child: SizedBox(

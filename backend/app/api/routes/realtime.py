@@ -24,8 +24,10 @@ obs_repo = ObservationRepository()
 maladie_repo = MaladieRepository()
 zone_repo = ZoneRepository()
 
-# YOLO pour les bounding boxes (utilise settings)
-yolo_model = YOLO(settings.YOLO_MODEL_PATH)
+# YOLO pour les bounding boxes
+YOLO_MODEL_PATH = settings.YOLO_MODEL_PATH
+SEUIL_CONFIANCE_YOLO = settings.SEUIL_CONFIANCE_YOLO
+yolo_model = YOLO(YOLO_MODEL_PATH)
 
 # Stockage des sessions
 sessions = {}
@@ -44,12 +46,34 @@ def get_bbox_color(maladie: str) -> str:
     }
     return colors.get(maladie, "#6B7280")
 
+async def creer_notification(
+    id_utilisateur: int,
+    titre: str,
+    message: str,
+    type: str,
+    id_zone: int = None,
+    id_parcelle: int = None,
+    latitude: float = None,
+    longitude: float = None
+):
+    """Crée une notification pour l'utilisateur"""
+    conn = await asyncpg.connect(settings.DATABASE_URL)
+    try:
+        await conn.execute("""
+            INSERT INTO notification 
+                (id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+        print(f"🔔 Notification créée: {titre}")
+    finally:
+        await conn.close()
+
 @router.post("/realtime/start")
-async def start_realtime_session():
+async def start_realtime_session(user_id: int = Form(1)):
     """Démarre une nouvelle session temps réel"""
     session_id = str(uuid.uuid4())
-    sessions[session_id] = RealtimeSession(session_id)
-    print(f"🎬 Session temps réel démarrée: {session_id}")
+    sessions[session_id] = RealtimeSession(session_id, user_id)
+    print(f"🎬 Session temps réel démarrée: {session_id} (utilisateur: {user_id})")
     return {"session_id": session_id}
 
 @router.post("/realtime/{session_id}/frame")
@@ -70,9 +94,9 @@ async def process_frame(
     
     print(f"📍 FRAME #{session.total_frames + 1} -> Lat: {latitude:.6f}, Lon: {longitude:.6f}, Précision: {precision_gps:.1f}m")
     
-    # Vérifier si la frame doit être analysée (utilise settings pour qualite_min)
+    # Vérifier si la frame doit être analysée
     doit_analyser, raison = session.doit_analyser_frame(
-        latitude, longitude, current_time, image_bytes, precision_gps, settings.QUALITE_IMAGE_MIN
+        latitude, longitude, current_time, image_bytes, precision_gps
     )
     
     if not doit_analyser:
@@ -94,18 +118,16 @@ async def process_frame(
         for r in results:
             if r.boxes is not None:
                 for box in r.boxes:
-                    if box.conf.item() >= settings.SEUIL_CONFIANCE_YOLO:
+                    if box.conf.item() >= SEUIL_CONFIANCE_YOLO:
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
                         w = x2 - x1
                         h = y2 - y1
                         
-                        # Filtres : ignorer les détections trop petites ou trop grandes
                         if w < 30 or h < 30:
                             continue
                         if w > img.shape[1] * 0.8 or h > img.shape[0] * 0.8:
                             continue
                         
-                        # Rapport d'aspect d'une feuille de tomate (~0.5 à 1.8)
                         aspect_ratio = w / h
                         if aspect_ratio < 0.3 or aspect_ratio > 2.5:
                             continue
@@ -115,7 +137,6 @@ async def process_frame(
                         
                         maladie, confiance = await ia_service.classifier(plant_bytes.tobytes())
                         
-                        # Ignorer si ResNet retourne "Non identifiable" ou confiance trop faible
                         if maladie == "Non identifiable" or confiance < 30.0:
                             continue
                         
@@ -136,7 +157,8 @@ async def process_frame(
             
             print(f"   ✅ ANALYSÉE: {maladie} ({confiance:.1f}%)")
             
-            id_diagnostic = await diag_repo.save_diagnostic(1, "TEMPS_REEL", None)
+            # ✅ UTILISER session.user_id
+            id_diagnostic = await diag_repo.save_diagnostic(session.user_id, "TEMPS_REEL", None)
             id_maladie = await maladie_repo.get_id_by_nom(maladie)
             now = datetime.now()
             
@@ -167,11 +189,11 @@ async def process_frame(
                 "position": {"lat": latitude, "lon": longitude}
             }
         else:
-            print(f"   ❌ Aucune plante détectée")
+            print(f"   ❌ Aucune plante de tomate détectée")
             return {
                 "status": "ignored",
                 "reason": "no_plant",
-                "message": "Aucune plante détectée"
+                "message": "Aucune plante de tomate détectée"
             }
             
     except Exception as e:
@@ -182,7 +204,7 @@ async def process_frame(
         }
 
 @router.post("/realtime/{session_id}/end")
-async def end_realtime_session(session_id: str, user_id: int = 1):
+async def end_realtime_session(session_id: str, user_id: int = Form(1)):
     """Termine la session et sauvegarde le résumé en base"""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session invalide")
@@ -199,13 +221,48 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
     
     zones_crees = []
     for zone_data in resume["zones"]:
+        zone_type = "HORS_PARCELLE"
+        
         id_zone = await zone_repo.creer_zone(
             centre_lat=zone_data["centre_lat"],
             centre_lon=zone_data["centre_lon"],
             nombre_obs=zone_data["observations"],
             id_parcelle=None,
-            zone_type="HORS_PARCELLE"
+            zone_type=zone_type
         )
+        
+        nb_obs = zone_data["observations"]
+        
+        if nb_obs >= 20:
+            titre = f"🚨 Zone critique détectée !"
+            message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
+            type_notif = "zone_critique"
+        elif nb_obs >= 10:
+            titre = f"⚠️ Zone active détectée"
+            message = f"Une zone infectée active a été détectée avec {nb_obs} observations. Traitement recommandé."
+            type_notif = "zone_creee"
+        else:
+            titre = f"📍 Nouvelle zone émergente"
+            message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
+            type_notif = "zone_creee"
+        
+        maladies_list = zone_data.get("maladies", {})
+        if maladies_list:
+            maladie_dominante = max(maladies_list, key=maladies_list.get) if maladies_list else "Inconnue"
+            maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
+            message = f"{message} Maladie dominante: {maladie_dominante}."
+        
+        # ✅ UTILISER user_id
+        await creer_notification(
+            id_utilisateur=user_id,
+            titre=titre,
+            message=message,
+            type=type_notif,
+            id_zone=id_zone,
+            latitude=zone_data["centre_lat"],
+            longitude=zone_data["centre_lon"]
+        )
+        
         zones_crees.append({
             "id_zone": id_zone,
             "observations": zone_data["observations"],
@@ -222,6 +279,7 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
         """)
         
         if table_exists:
+            # ✅ UTILISER user_id
             await conn.execute("""
                 INSERT INTO session 
                     (id_utilisateur, date_debut, date_fin, mode, total_frames, frames_analysees, zones_crees, resume)
@@ -242,6 +300,7 @@ async def end_realtime_session(session_id: str, user_id: int = 1):
     finally:
         await conn.close()
     
+    # Supprimer la session
     del sessions[session_id]
     
     return {

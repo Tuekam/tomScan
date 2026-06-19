@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../theme.dart';
-import '../config.dart'; // ← AJOUT
+import '../config.dart';
+import '../services/auth_service.dart';
 import 'map_screen.dart';
 
 class StatsScreen extends StatefulWidget {
@@ -38,6 +39,15 @@ class _StatsScreenState extends State<StatsScreen> {
     '365j': '1 an',
   };
 
+  static const Map<String, Color> _maladieColors = {
+    'Mildiou': Color(0xFFEF4444),
+    'Alternariose': Color(0xFFF59E0B),
+    'Virus jaune': Color(0xFF8B5CF6),
+    'Septoriose': Color(0xFF6366F1),
+    'Moisissure': Color(0xFFEC4899),
+    'Sain': Color(0xFF22C55E),
+  };
+
   @override
   void initState() {
     super.initState();
@@ -45,13 +55,15 @@ class _StatsScreenState extends State<StatsScreen> {
     _loadStats();
   }
 
+  Future<int?> _getUserId() async {
+    return await AuthService().getUserId();
+  }
+
   Future<void> _loadFilters() async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
+      final userId = await _getUserId() ?? 1;
       final [parcellesRes, maladiesRes] = await Future.wait([
-        _dio.get('${AppConfig.baseUrl}/parcelles?id_utilisateur=1'),
+        _dio.get('${AppConfig.baseUrl}/parcelles?id_utilisateur=$userId'),
         _dio.get('${AppConfig.baseUrl}/maladies'),
       ]);
 
@@ -71,16 +83,14 @@ class _StatsScreenState extends State<StatsScreen> {
     });
 
     try {
+      final userId = await _getUserId() ?? 1;
       final queryParams = {
         'periode': _selectedPeriode,
-        'user_id': 1,
+        'user_id': userId,
         if (_selectedParcelleId != null) 'parcelle_id': _selectedParcelleId,
         if (_selectedMaladie != null) 'maladie': _selectedMaladie,
       };
 
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.get(
         '${AppConfig.baseUrl}/stats',
         queryParameters: queryParams,
@@ -117,9 +127,6 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _showZoneDetail(Map<String, dynamic> zone) async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response =
           await _dio.get('${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}');
 
@@ -144,9 +151,6 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _showParcelleDetail(Map<String, dynamic> parcelle) async {
     try {
-      // ============================================================
-      // URL centralisée
-      // ============================================================
       final response = await _dio.get(
           '${AppConfig.baseUrl}/parcelles/${parcelle['id_parcelle']}/stats');
 
@@ -246,7 +250,7 @@ class _StatsScreenState extends State<StatsScreen> {
                       Row(
                         children: [
                           Text(
-                            m['nom'],
+                            _getMaladieDisplayName(m['nom']),
                             style: const TextStyle(fontWeight: FontWeight.w500),
                           ),
                           const Spacer(),
@@ -438,42 +442,30 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   String _getMaladieDisplayName(String nom) {
-    switch (nom) {
-      case 'Tomato_Early_Blight':
-        return 'Alternariose';
-      case 'Tomato_healthy':
-        return 'Sain';
-      case 'Tomato_Late_blight':
-        return 'Mildiou';
-      case 'Tomato_leaf_yellow_curl_virus':
-        return 'Virus jaune';
-      case 'Tomato_mold':
-        return 'Moisissure';
-      case 'Tomato_Septoria_leaf_spot':
-        return 'Septoriose';
-      default:
-        return nom.replaceAll('_', ' ');
-    }
+    String clean = nom.replaceAll('_', ' ').trim();
+
+    if (clean.contains('Early') && clean.contains('Blight'))
+      return 'Alternariose';
+    if (clean.contains('Healthy')) return 'Sain';
+    if (clean.contains('late') && clean.contains('blight')) return 'Mildiou';
+    if (clean.contains('yellow') || clean.contains('curl'))
+      return 'Virus jaune';
+    if (clean.contains('mold')) return 'Moisissure';
+    if (clean.contains('septoria') || clean.contains('spot'))
+      return 'Septoriose';
+
+    if (_maladieColors.containsKey(clean)) return clean;
+
+    return clean;
   }
 
   Color _getMaladieColor(String nom) {
-    final display = _getMaladieDisplayName(nom);
-    switch (display) {
-      case 'Mildiou':
-        return AppTheme.danger;
-      case 'Alternariose':
-        return AppTheme.secondary;
-      case 'Virus jaune':
-        return Colors.purple;
-      case 'Septoriose':
-        return Colors.brown;
-      case 'Moisissure':
-        return Colors.teal;
-      case 'Sain':
-        return Colors.green;
-      default:
-        return AppTheme.primary;
+    if (_maladieColors.containsKey(nom)) {
+      return _maladieColors[nom]!;
     }
+
+    final display = _getMaladieDisplayName(nom);
+    return _maladieColors[display] ?? Colors.grey;
   }
 
   @override
@@ -627,7 +619,7 @@ class _StatsScreenState extends State<StatsScreen> {
                                               ),
                                               const SizedBox(width: 6),
                                               Text(
-                                                '${m['nom']}: ${m['count']} (${m['pourcentage']}%)',
+                                                '${_getMaladieDisplayName(m['nom'])}: ${m['count']} (${m['pourcentage']}%)',
                                                 style: const TextStyle(
                                                     fontSize: 12),
                                               ),
@@ -843,8 +835,7 @@ class _StatsScreenState extends State<StatsScreen> {
                 value: null, child: Text('Toutes maladies')),
             ..._maladies.map((m) => DropdownMenuItem<String?>(
                   value: m['nom'],
-                  child: Text(
-                      m['nom'].replaceAll('_', ' ').replaceAll('Tomato ', '')),
+                  child: Text(_getMaladieDisplayName(m['nom'])),
                 )),
           ],
           onChanged: (v) {
