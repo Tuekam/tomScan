@@ -24,17 +24,18 @@ class ZoneRepository:
     
     async def creer_zone(self, centre_lat: float, centre_lon: float, 
                          nombre_obs: int, id_parcelle: int | None = None,
-                         zone_type: str = "HORS_PARCELLE") -> int:
-        """Crée une nouvelle zone infectée"""
+                         zone_type: str = "HORS_PARCELLE",
+                         id_utilisateur: int = 1) -> int:
+        """Crée une nouvelle zone infectée avec l'utilisateur associé"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             row = await conn.fetchrow("""
                 INSERT INTO zone_infectee 
-                    (centre_latitude, centre_longitude, rayon, nombre_observations, id_parcelle, zone_type)
-                VALUES ($1, $2, 1.0, $3, $4, $5)
+                    (centre_latitude, centre_longitude, rayon, nombre_observations, id_parcelle, zone_type, id_utilisateur)
+                VALUES ($1, $2, 1.0, $3, $4, $5, $6)
                 RETURNING id_zone
-            """, centre_lat, centre_lon, nombre_obs, id_parcelle, zone_type)
-            print(f"   ✅ Nouvelle zone #{row['id_zone']} créée ({zone_type})")
+            """, centre_lat, centre_lon, nombre_obs, id_parcelle, zone_type, id_utilisateur)
+            print(f"   ✅ Nouvelle zone #{row['id_zone']} créée ({zone_type}) pour l'utilisateur {id_utilisateur}")
             return row['id_zone']
         finally:
             await conn.close()
@@ -80,7 +81,7 @@ class ZoneRepository:
             await conn.close()
     
     async def get_toutes_les_zones(self) -> list[dict]:
-        """Récupère toutes les zones"""
+        """Récupère toutes les zones (admin)"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             rows = await conn.fetch("""
@@ -92,6 +93,7 @@ class ZoneRepository:
                     z.nombre_observations,
                     z.zone_type,
                     z.id_parcelle,
+                    z.id_utilisateur,
                     p.nom as parcelle_nom
                 FROM zone_infectee z
                 LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
@@ -101,14 +103,38 @@ class ZoneRepository:
         finally:
             await conn.close()
     
-    # ========== NOUVELLES MÉTHODES POUR PREDICT.PY ==========
+    async def get_zones_by_user(self, user_id: int) -> list[dict]:
+        """Récupère uniquement les zones de l'utilisateur"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            rows = await conn.fetch("""
+                SELECT 
+                    z.id_zone,
+                    z.centre_latitude,
+                    z.centre_longitude,
+                    z.rayon,
+                    z.nombre_observations,
+                    z.zone_type,
+                    z.id_parcelle,
+                    z.id_utilisateur,
+                    p.nom as parcelle_nom
+                FROM zone_infectee z
+                LEFT JOIN parcelle p ON z.id_parcelle = p.id_parcelle
+                WHERE z.id_utilisateur = $1
+                ORDER BY z.id_zone
+            """, user_id)
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+    
+    # ========== MÉTHODES EXISTANTES ==========
     
     async def get_zone_by_id(self, id_zone: int) -> dict | None:
         """Récupère une zone par son ID"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             row = await conn.fetchrow("""
-                SELECT id_zone, nombre_observations, centre_latitude, centre_longitude, zone_type
+                SELECT id_zone, nombre_observations, centre_latitude, centre_longitude, zone_type, id_utilisateur
                 FROM zone_infectee
                 WHERE id_zone = $1
             """, id_zone)
@@ -140,5 +166,50 @@ class ZoneRepository:
                     WHERE id_zone = $4
                 """, nb_obs, centre_lat, centre_lon, id_zone)
             print(f"   ✅ Zone #{id_zone} mise à jour: {nb_obs} observations")
+        finally:
+            await conn.close()
+    
+    async def recalculer_zone_apres_suppression(self, id_zone: int) -> None:
+        """Recalcule une zone après suppression d'observations"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            zone = await conn.fetchrow("""
+                SELECT centre_latitude, centre_longitude, rayon 
+                FROM zone_infectee 
+                WHERE id_zone = $1
+            """, id_zone)
+            
+            if not zone:
+                return
+            
+            observations = await conn.fetch("""
+                SELECT id_observation, latitude, longitude
+                FROM observation
+                WHERE ST_DWithin(
+                    ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)::geography,
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                    $3
+                )
+            """, zone["centre_longitude"], zone["centre_latitude"], zone["rayon"])
+            
+            nb_obs = len(observations)
+            
+            if nb_obs < 10:
+                await conn.execute("DELETE FROM zone_infectee WHERE id_zone = $1", id_zone)
+                print(f"🗑️ Zone #{id_zone} supprimée (plus que {nb_obs} observations)")
+                return
+            
+            centre_lat = sum(o["latitude"] for o in observations) / nb_obs
+            centre_lon = sum(o["longitude"] for o in observations) / nb_obs
+            
+            await conn.execute("""
+                UPDATE zone_infectee 
+                SET nombre_observations = $1,
+                    centre_latitude = $2,
+                    centre_longitude = $3
+                WHERE id_zone = $4
+            """, nb_obs, centre_lat, centre_lon, id_zone)
+            
+            print(f"🔄 Zone #{id_zone} mise à jour: {nb_obs} observations")
         finally:
             await conn.close()

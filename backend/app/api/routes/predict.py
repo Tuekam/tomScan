@@ -112,7 +112,7 @@ async def predict(
     longitude: float = Form(...),
     precision_gps: float = Form(0.0),
     id_parcelle: int = Form(None),
-    id_utilisateur: int = Form(1)  # ← NOUVEAU PARAMÈTRE
+    id_utilisateur: int = Form(1)
 ):
     # 1. Lecture de l'image
     image_bytes = await image.read()
@@ -141,7 +141,7 @@ async def predict(
     # 3. Classification ResNet18
     maladie, confiance = await ia_service.classifier(image_bytes)
 
-    # 4. Sauvegarde du diagnostic (avec id_utilisateur)
+    # 4. Sauvegarde du diagnostic
     id_diagnostic = await diag_repo.save_diagnostic(id_utilisateur, "PHOTO", id_parcelle)
 
     # 5. Récupération de l'id de la maladie
@@ -236,11 +236,18 @@ async def predict(
             id_zone = id_existant
             print(f"🔄 Zone #{id_existant} mise à jour (total: {nouveau_total} observations)")
         else:
-            # Créer une nouvelle zone
+            # ============================================================
+            # CRÉER UNE NOUVELLE ZONE AVEC id_utilisateur
+            # ============================================================
             id_zone = await zone_repo.creer_zone(
-                centre_lat, centre_lon, len(groupe), id_parcelle_associee, zone_type
+                centre_lat=centre_lat,
+                centre_lon=centre_lon,
+                nombre_obs=len(groupe),
+                id_parcelle=id_parcelle_associee,
+                zone_type=zone_type,
+                id_utilisateur=id_utilisateur  # ← AJOUT ICI
             )
-            print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type})")
+            print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type}) pour l'utilisateur {id_utilisateur}")
             
             # ============================================================
             # CRÉER UNE NOTIFICATION POUR LA NOUVELLE ZONE
@@ -267,7 +274,7 @@ async def predict(
             maladie_dominante = max(maladies_groupe, key=maladies_groupe.get) if maladies_groupe else "Inconnue"
             maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
             
-            # Créer la notification AVEC coordonnées
+            # Créer la notification
             await creer_notification(
                 id_utilisateur=id_utilisateur,
                 titre=titre,

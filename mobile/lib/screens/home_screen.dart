@@ -1,3 +1,4 @@
+// screens/home_screen.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'camera_screen.dart';
