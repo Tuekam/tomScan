@@ -22,6 +22,8 @@ dependencies:
   fl_chart: any
   flutter_markdown: any 
   http: any
+  sqflite: any
+  path_provider: any 
 
 dev_dependencies:
   flutter_test:

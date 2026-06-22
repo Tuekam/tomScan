@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
+import '../services/local_database_service.dart';
 import 'register_screen.dart';
 import 'home_screen.dart';
 import 'admin/admin_home_screen.dart';
@@ -24,6 +25,8 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
+
+  final LocalDatabaseService _db = LocalDatabaseService();
 
   final FocusNode _emailFocus = FocusNode();
   final FocusNode _passwordFocus = FocusNode();
@@ -46,37 +49,44 @@ class _LoginScreenState extends State<LoginScreen> {
     final paddingHorizontal =
         isLargeScreen ? 48.0 : (isSmallScreen ? 20.0 : 32.0);
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: EdgeInsets.symmetric(
-            horizontal: paddingHorizontal,
-            vertical: 16,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: screenHeight - MediaQuery.of(context).padding.top - 32,
+    return WillPopScope(
+      onWillPop: () async {
+        // ✅ Empêcher le retour en arrière depuis la page de connexion
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: EdgeInsets.symmetric(
+              horizontal: paddingHorizontal,
+              vertical: 16,
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(isSmallScreen),
-                const SizedBox(height: 24),
-                if (_errorMessage != null) _buildErrorMessage(),
-                _buildEmailField(),
-                const SizedBox(height: 16),
-                _buildPasswordField(),
-                const SizedBox(height: 8),
-                _buildForgotPasswordLink(),
-                const SizedBox(height: 24),
-                _buildLoginButton(isSmallScreen),
-                const SizedBox(height: 16),
-                _buildRegisterLink(isSmallScreen),
-                const SizedBox(height: 8),
-              ],
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight:
+                    screenHeight - MediaQuery.of(context).padding.top - 32,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHeader(isSmallScreen),
+                  const SizedBox(height: 24),
+                  if (_errorMessage != null) _buildErrorMessage(),
+                  _buildEmailField(),
+                  const SizedBox(height: 16),
+                  _buildPasswordField(),
+                  const SizedBox(height: 8),
+                  _buildForgotPasswordLink(),
+                  const SizedBox(height: 24),
+                  _buildLoginButton(isSmallScreen),
+                  const SizedBox(height: 16),
+                  _buildRegisterLink(isSmallScreen),
+                  const SizedBox(height: 8),
+                ],
+              ),
             ),
           ),
         ),
@@ -398,6 +408,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ============================================================
   // 📌 CONNEXION AVEC REDIRECTION VERS LE BON ÉCRAN
+  // ET INITIALISATION DU CACHE LOCAL
   // ============================================================
   Future<void> _login() async {
     if (_emailController.text.trim().isEmpty) {
@@ -425,19 +436,25 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (response.statusCode == 200) {
         final data = response.data;
+        final userId = data['id_utilisateur'];
+        final role = data['role'] ?? 'agriculteur';
 
+        // ✅ Sauvegarder les données utilisateur
         await AuthService().saveUserData(
           token: data['token'],
-          userId: data['id_utilisateur'],
+          userId: userId,
           nom: data['nom'],
           email: data['email'],
-          role: data['role'] ?? 'agriculteur',
+          role: role,
         );
+
+        // ✅ Initialiser le cache local avec l'ID utilisateur
+        _db.setUserId(userId);
+        debugPrint('📱 Cache local initialisé pour l\'utilisateur $userId');
 
         if (!mounted) return;
 
         // ✅ Rediriger en fonction du rôle
-        final role = data['role'] ?? 'agriculteur';
         if (role == 'admin') {
           Navigator.pushReplacement(
             context,

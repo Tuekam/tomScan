@@ -59,7 +59,6 @@ class _MapScreenState extends State<MapScreen>
 
   static const LatLng _defaultCenter = LatLng(4.051070, 9.767880);
 
-  // ID utilisateur connecté
   int _userId = 1;
 
   @override
@@ -277,6 +276,7 @@ class _MapScreenState extends State<MapScreen>
     }
   }
 
+  // 🔥 CORRECTION : Forcer une nouvelle position GPS + zoom maximum
   Future<void> _getUserLocation() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -287,8 +287,10 @@ class _MapScreenState extends State<MapScreen>
         return;
       }
 
+      // 🔥 Forcer une nouvelle position (pas de cache)
       final locationSettings = const LocationSettings(
         accuracy: LocationAccuracy.bestForNavigation,
+        timeLimit: Duration(seconds: 10),
       );
 
       Position position = await Geolocator.getCurrentPosition(
@@ -296,6 +298,7 @@ class _MapScreenState extends State<MapScreen>
       );
 
       final userLatLng = LatLng(position.latitude, position.longitude);
+      print('📍 Position GPS: ${position.latitude}, ${position.longitude}');
 
       setState(() {
         _userPosition = userLatLng;
@@ -321,10 +324,13 @@ class _MapScreenState extends State<MapScreen>
         );
       });
 
-      if (widget.initialLatitude == null) {
+      // 🔥 Zoom maximum sur la position
+      if (widget.initialLatitude == null && mounted) {
         _mapController.move(userLatLng, 18);
+        print('📍 Carte centrée sur position avec zoom 18');
       }
     } catch (e) {
+      print('Erreur GPS: $e');
       setState(() {
         _errorMessage = 'Impossible d\'obtenir votre position: $e';
       });
@@ -333,7 +339,6 @@ class _MapScreenState extends State<MapScreen>
 
   Future<void> _loadZones() async {
     try {
-      // 🔥 Récupérer uniquement les zones liées aux parcelles de l'utilisateur
       final response = await _dio.get(
         '${AppConfig.baseUrl}/zones',
         queryParameters: {'user_id': _userId},
@@ -494,21 +499,26 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
+  // 🔥 CORRECTION : Forcer une nouvelle position + zoom maximum au clic
   Future<void> _centerOnUser() async {
-    if (_userPosition != null) {
+    await _getUserLocation();
+    if (_userPosition != null && mounted) {
       _mapController.move(_userPosition!, 18);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Centrage sur votre position'),
-              duration: Duration(milliseconds: 800)),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Centrage sur votre position'),
+          duration: Duration(milliseconds: 800),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     } else {
-      final status = await Permission.location.request();
-      if (status.isGranted) {
-        await _getUserLocation();
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impossible d\'obtenir votre position'),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -520,8 +530,10 @@ class _MapScreenState extends State<MapScreen>
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Cliquez sur la carte pour ajouter des points'),
-            duration: Duration(seconds: 2)),
+          content: Text('Cliquez sur la carte pour ajouter des points'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
@@ -538,8 +550,10 @@ class _MapScreenState extends State<MapScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Une parcelle doit avoir au moins 3 points'),
-              backgroundColor: Colors.orange),
+            content: Text('Une parcelle doit avoir au moins 3 points'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
       return;
@@ -573,8 +587,10 @@ class _MapScreenState extends State<MapScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-                content: Text('Parcelle "$parcelName" créée !'),
-                backgroundColor: Colors.green),
+              content: Text('Parcelle "$parcelName" créée !'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       }
@@ -648,8 +664,10 @@ class _MapScreenState extends State<MapScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Parcelle supprimée'),
-              backgroundColor: Colors.green),
+            content: Text('Parcelle supprimée'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
     } catch (e) {

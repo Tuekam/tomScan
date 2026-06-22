@@ -16,6 +16,7 @@ import 'chatbot_screen.dart';
 import 'profile_screen.dart';
 import 'notifications_screen.dart';
 import '../services/auth_service.dart';
+import '../services/local_database_service.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -37,23 +38,45 @@ class _CameraScreenState extends State<CameraScreen> {
   String _lastLocation = '';
   Map<String, dynamic>? _lastDiagnosticData;
 
+  final LocalDatabaseService _localDb = LocalDatabaseService();
+
+  // Clé pour le stockage du dernier diagnostic (avec user_id)
+  String get _lastDiagnosisKey => 'last_diagnosis_${_currentUserId}';
+  String get _lastConfidenceKey => 'last_confidence_${_currentUserId}';
+  String get _lastDateKey => 'last_date_${_currentUserId}';
+  String get _lastLocationKey => 'last_location_${_currentUserId}';
+  String get _lastDataKey => 'last_diagnostic_data_${_currentUserId}';
+
+  int _currentUserId = 0;
+
   @override
   void initState() {
     super.initState();
+    _loadCurrentUserId();
+  }
+
+  Future<void> _loadCurrentUserId() async {
+    _currentUserId = await AuthService().getUserId() ?? 0;
+    // Initialiser le cache local avec l'ID utilisateur
+    if (_currentUserId != 0) {
+      _localDb.setUserId(_currentUserId);
+    }
     _loadLastDiagnosis();
   }
 
   Future<void> _loadLastDiagnosis() async {
+    if (_currentUserId == 0) return;
+
     final prefs = await SharedPreferences.getInstance();
 
     setState(() {
-      _lastDiagnosis = prefs.getString('last_diagnosis') ?? '';
-      _lastConfidence = prefs.getString('last_confidence') ?? '';
-      _lastDate = prefs.getString('last_date') ?? '';
-      _lastLocation = prefs.getString('last_location') ?? '';
+      _lastDiagnosis = prefs.getString(_lastDiagnosisKey) ?? '';
+      _lastConfidence = prefs.getString(_lastConfidenceKey) ?? '';
+      _lastDate = prefs.getString(_lastDateKey) ?? '';
+      _lastLocation = prefs.getString(_lastLocationKey) ?? '';
     });
 
-    final lastData = prefs.getString('last_diagnostic_data');
+    final lastData = prefs.getString(_lastDataKey);
     if (lastData != null) {
       try {
         _lastDiagnosticData =
@@ -71,13 +94,15 @@ class _CameraScreenState extends State<CameraScreen> {
     required String location,
     required Map<String, dynamic> fullData,
   }) async {
+    if (_currentUserId == 0) return;
+
     final prefs = await SharedPreferences.getInstance();
 
-    await prefs.setString('last_diagnosis', diagnosis);
-    await prefs.setString('last_confidence', confidence);
-    await prefs.setString('last_date', date);
-    await prefs.setString('last_location', location);
-    await prefs.setString('last_diagnostic_data', json.encode(fullData));
+    await prefs.setString(_lastDiagnosisKey, diagnosis);
+    await prefs.setString(_lastConfidenceKey, confidence);
+    await prefs.setString(_lastDateKey, date);
+    await prefs.setString(_lastLocationKey, location);
+    await prefs.setString(_lastDataKey, json.encode(fullData));
 
     setState(() {
       _lastDiagnosis = diagnosis;
@@ -141,6 +166,49 @@ class _CameraScreenState extends State<CameraScreen> {
     return '${now.day}/${now.month}/${now.year} ${now.hour}:${now.minute.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _saveDiagnosticLocally({
+    required String imagePath,
+    required String maladieNom,
+    required double confiance,
+    required int idDiagnostic,
+    required int idObservation,
+    required double latitude,
+    required double longitude,
+    required String description,
+    required String symptomes,
+    required String recommandation,
+    required String niveauGravite,
+    required String parcelleNom,
+  }) async {
+    try {
+      final data = {
+        'id': idDiagnostic,
+        'type': 'photo',
+        'maladie_nom': maladieNom,
+        'confiance': confiance,
+        'image_path': imagePath,
+        'latitude': latitude,
+        'longitude': longitude,
+        'description': description,
+        'symptomes': symptomes,
+        'recommandation': recommandation,
+        'niveau_gravite': niveauGravite,
+        'parcelle_nom': parcelleNom,
+        'date': DateTime.now().toIso8601String(),
+        '_synced': true,
+      };
+
+      await _localDb.saveHistoryItem(
+        'photo',
+        DateTime.now().toIso8601String(),
+        data,
+      );
+      debugPrint('✅ Diagnostic sauvegardé localement (ID: $idDiagnostic)');
+    } catch (e) {
+      debugPrint('⚠️ Erreur sauvegarde locale: $e');
+    }
+  }
+
   Future<void> _analyzeImage() async {
     if (_image == null) return;
 
@@ -154,18 +222,17 @@ class _CameraScreenState extends State<CameraScreen> {
 
       final userId = await AuthService().getUserId() ?? 1;
 
-      // 🔥 CORRECTION : user_id doit être dans le body, pas dans l'URL
       final formData = FormData.fromMap({
         'image': await MultipartFile.fromFile(_image!.path),
         'latitude': lat,
         'longitude': lon,
         'precision_gps': position?.accuracy ?? 5.0,
-        'id_utilisateur': userId, // ← Ajout de l'ID utilisateur dans le body
+        'id_utilisateur': userId,
       });
 
       final response = await _dio.post(
         '${AppConfig.baseUrl}/predict',
-        data: formData, // ← Plus de queryParameters
+        data: formData,
       );
 
       final data = response.data;
@@ -180,19 +247,43 @@ class _CameraScreenState extends State<CameraScreen> {
       if (displayDiagnosis.contains('Tomato '))
         displayDiagnosis = displayDiagnosis.replaceAll('Tomato ', '');
 
+      final parcelleNom = data['parcelle_nom'] ?? 'Hors parcelle';
+      final idDiagnostic = data['id_diagnostic'] ?? 0;
+      final idObservation = data['id_observation'] ?? 0;
+      final description = data['description'] ?? '';
+      final symptomes = data['symptomes'] ?? '';
+      final recommandation = data['recommandation'] ?? '';
+      final niveauGravite = data['niveau_gravite'] ?? '';
+
       final fullData = {
         'imagePath': _image!.path,
         'maladie': maladie,
         'confiance': confiance,
-        'id_diagnostic': data['id_diagnostic'] ?? 0,
-        'id_observation': data['id_observation'] ?? 0,
+        'id_diagnostic': idDiagnostic,
+        'id_observation': idObservation,
         'latitude': lat,
         'longitude': lon,
-        'description': data['description'] ?? '',
-        'symptomes': data['symptomes'] ?? '',
-        'recommandation': data['recommandation'] ?? '',
-        'niveau_gravite': data['niveau_gravite'] ?? '',
+        'description': description,
+        'symptomes': symptomes,
+        'recommandation': recommandation,
+        'niveau_gravite': niveauGravite,
+        'parcelle_nom': parcelleNom,
       };
+
+      await _saveDiagnosticLocally(
+        imagePath: _image!.path,
+        maladieNom: maladie,
+        confiance: confiance,
+        idDiagnostic: idDiagnostic,
+        idObservation: idObservation,
+        latitude: lat,
+        longitude: lon,
+        description: description,
+        symptomes: symptomes,
+        recommandation: recommandation,
+        niveauGravite: niveauGravite,
+        parcelleNom: parcelleNom,
+      );
 
       await _saveLastDiagnosis(
         diagnosis: displayDiagnosis,
@@ -204,7 +295,6 @@ class _CameraScreenState extends State<CameraScreen> {
 
       if (!mounted) return;
 
-      // Navigation vers l'écran résultat avec attente du retour
       final result = await Navigator.push(
         context,
         MaterialPageRoute(
@@ -212,19 +302,18 @@ class _CameraScreenState extends State<CameraScreen> {
             imagePath: _image!.path,
             maladie: maladie,
             confiance: confiance,
-            idDiagnostic: data['id_diagnostic'] ?? 0,
-            idObservation: data['id_observation'] ?? 0,
+            idDiagnostic: idDiagnostic,
+            idObservation: idObservation,
             latitude: lat,
             longitude: lon,
-            description: data['description'] ?? '',
-            symptomes: data['symptomes'] ?? '',
-            recommandation: data['recommandation'] ?? '',
-            niveauGravite: data['niveau_gravite'] ?? '',
+            description: description,
+            symptomes: symptomes,
+            recommandation: recommandation,
+            niveauGravite: niveauGravite,
           ),
         ),
       );
 
-      // Traitement du retour (bouton "Voir sur la carte" ou "Poser une question")
       if (result != null && mounted) {
         if (result['action'] == 'view_on_map') {
           Navigator.push(
@@ -353,8 +442,8 @@ class _CameraScreenState extends State<CameraScreen> {
         ),
         backgroundColor: Colors.white,
         elevation: 0,
+        automaticallyImplyLeading: false, // ← SUPPRIME LA FLÈCHE RETOUR
         actions: [
-          // Notifications
           IconButton(
             icon: const Icon(Icons.notifications_none),
             onPressed: () {
@@ -367,7 +456,6 @@ class _CameraScreenState extends State<CameraScreen> {
             },
             color: AppTheme.primary,
           ),
-          // Profil
           IconButton(
             icon: const Icon(Icons.person_outline),
             onPressed: () {

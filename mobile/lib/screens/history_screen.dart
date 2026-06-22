@@ -1,9 +1,11 @@
 // screens/history_screen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import '../theme.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
+import '../services/local_database_service.dart';
 import 'result_screen.dart';
 import 'realtime_result_screen.dart';
 import 'map_screen.dart';
@@ -20,25 +22,29 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> _items = [];
   bool _isLoading = true;
   String? _error;
-  int? _userId;
 
-  // Filtres
   String _selectedFilterType = 'tous';
   String? _selectedMaladie;
   DateTime? _startDate;
   DateTime? _endDate;
   List<Map<String, dynamic>> _maladies = [];
 
+  final LocalDatabaseService _db = LocalDatabaseService();
+
   @override
   void initState() {
     super.initState();
-    _loadUserId();
+    _initLocalDb();
     _loadMaladies();
     _loadHistory();
   }
 
-  Future<void> _loadUserId() async {
-    _userId = await AuthService().getUserId();
+  Future<void> _initLocalDb() async {
+    final userId = await AuthService().getUserId();
+    if (userId != null) {
+      _db.setUserId(userId);
+      debugPrint('📱 Base locale initialisée pour l\'utilisateur $userId');
+    }
   }
 
   Future<void> _loadMaladies() async {
@@ -59,8 +65,118 @@ class _HistoryScreenState extends State<HistoryScreen> {
       _isLoading = true;
       _error = null;
     });
+
+    // ============================================================
+    // 1. CHARGER LE CACHE LOCAL (INSTANTANÉ)
+    // ============================================================
+    try {
+      final localItems = await _db.getHistoryItems(limit: 50);
+      if (localItems.isNotEmpty) {
+        debugPrint(
+            '📱 Chargé ${localItems.length} éléments depuis le cache local');
+        setState(() {
+          _items = localItems.map((item) {
+            final data = item['data'] as String;
+            final parsedData = json.decode(data) as Map<String, dynamic>;
+            return {
+              ...parsedData,
+              '_local_id': item['id'],
+              'date': item['date'] ?? parsedData['date'],
+              'type': item['type'] ?? parsedData['type'] ?? 'photo',
+            };
+          }).toList();
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Erreur chargement local: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
+
+    // ============================================================
+    // 2. MISE À JOUR EN ARRIÈRE-PLAN (avec déduplication)
+    // ============================================================
+    _syncWithServer();
+  }
+
+  Future<void> _syncWithServer() async {
     try {
       final userId = await AuthService().getUserId() ?? 1;
+
+      // ============================================================
+      // RÉCUPÉRER TOUTES LES DONNÉES DU SERVEUR
+      // ============================================================
+      final allQueryParams = <String, dynamic>{
+        'user_id': userId,
+        'limit': 100,
+      };
+
+      final allResponse = await _dio.get(
+        '${AppConfig.baseUrl}/history',
+        queryParameters: allQueryParams,
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
+
+      if (allResponse.statusCode == 200) {
+        final allData = allResponse.data;
+        final allItems = List<Map<String, dynamic>>.from(allData['items']);
+
+        debugPrint('📡 Récupéré ${allItems.length} éléments depuis le serveur');
+
+        // ============================================================
+        // SAUVEGARDER UNIQUEMENT LES ÉLÉMENTS QUI N'EXISTENT PAS EN LOCAL
+        // ============================================================
+        final existingServerIds = <int>{};
+        final localItems = await _db.getHistoryItems(limit: 200);
+        for (var local in localItems) {
+          try {
+            final localData = json.decode(local['data'] as String);
+            if (localData['id'] is int) {
+              existingServerIds.add(localData['id'] as int);
+            } else if (localData['id'] is String) {
+              final parsed = int.tryParse(localData['id']);
+              if (parsed != null) existingServerIds.add(parsed);
+            }
+          } catch (e) {
+            debugPrint('Erreur parsing local: $e');
+          }
+        }
+
+        int newItemsCount = 0;
+        for (var item in allItems) {
+          final serverId = item['id'];
+          if (serverId != null && !existingServerIds.contains(serverId)) {
+            try {
+              await _db.saveHistoryItem(
+                item['type'] ?? 'photo',
+                item['date'] ?? DateTime.now().toIso8601String(),
+                {...item, '_synced': true},
+              );
+              newItemsCount++;
+            } catch (e) {
+              debugPrint('Erreur sauvegarde locale: $e');
+            }
+          }
+        }
+
+        if (newItemsCount > 0) {
+          debugPrint(
+              '✅ $newItemsCount nouveaux éléments synchronisés en local');
+        }
+      }
+
+      // ============================================================
+      // CHARGER AVEC LES FILTRES POUR L'AFFICHAGE
+      // ============================================================
       final queryParams = <String, dynamic>{
         'user_id': userId,
         'limit': 50,
@@ -69,15 +185,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (_selectedFilterType != 'tous') {
         queryParams['type'] = _selectedFilterType;
       }
-
       if (_selectedMaladie != null && _selectedMaladie!.isNotEmpty) {
         queryParams['maladie'] = _selectedMaladie;
       }
-
       if (_startDate != null) {
         queryParams['date_debut'] = _startDate!.toIso8601String().split('T')[0];
       }
-
       if (_endDate != null) {
         queryParams['date_fin'] = _endDate!.toIso8601String().split('T')[0];
       }
@@ -85,20 +198,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final response = await _dio.get(
         '${AppConfig.baseUrl}/history',
         queryParameters: queryParams,
+        options: Options(
+          sendTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
       );
 
       if (response.statusCode == 200) {
         final data = response.data;
-        setState(() {
-          _items = List<Map<String, dynamic>>.from(data['items']);
-          _isLoading = false;
-        });
+        final items = List<Map<String, dynamic>>.from(data['items']);
+
+        if (mounted) {
+          setState(() {
+            _items = items;
+          });
+        }
       }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
+      debugPrint('Erreur synchronisation: $e');
+      // Ne pas afficher d'erreur à l'utilisateur car on a déjà les données locales
     }
   }
 
@@ -169,34 +287,48 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       await _dio.delete('${AppConfig.baseUrl}$endpoint');
 
-      setState(() {
-        _items.removeWhere((e) => e['id'] == item['id']);
-      });
+      // Supprimer également de la base locale
+      final localId = item['_local_id'];
+      if (localId != null) {
+        await _db.deleteHistoryItem(localId);
+      } else {
+        await _db.deleteHistoryItemByServerId(item['id']);
+      }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            item['type'] == 'photo'
-                ? 'Diagnostic #${item['id']} supprimé'
-                : 'Session #${item['id']} supprimée',
+      if (mounted) {
+        setState(() {
+          _items.removeWhere((e) => e['id'] == item['id']);
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              item['type'] == 'photo'
+                  ? 'Diagnostic #${item['id']} supprimé'
+                  : 'Session #${item['id']} supprimée',
+            ),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            duration: const Duration(seconds: 2),
           ),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur: $e'),
-          backgroundColor: AppTheme.danger,
-          behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: AppTheme.danger,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -245,7 +377,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Type
                     DropdownButtonFormField<String>(
                       decoration: InputDecoration(
                         labelText: 'Type',
@@ -256,20 +387,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         filled: true,
                         fillColor: AppTheme.background,
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                       ),
                       value: _selectedFilterType,
                       items: const [
                         DropdownMenuItem(value: 'tous', child: Text('Tous')),
                         DropdownMenuItem(value: 'photo', child: Text('Photos')),
                         DropdownMenuItem(
-                            value: 'realtime', child: Text('Temps réel')),
+                          value: 'realtime',
+                          child: Text('Temps réel'),
+                        ),
                       ],
-                      onChanged: (v) =>
-                          setStateDialog(() => _selectedFilterType = v!),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setStateDialog(() => _selectedFilterType = value);
+                        }
+                      },
                     ),
                     const SizedBox(height: 16),
-                    // Maladie
                     DropdownButtonFormField<String?>(
                       decoration: InputDecoration(
                         labelText: 'Maladie',
@@ -280,24 +417,30 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         filled: true,
                         fillColor: AppTheme.background,
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                       ),
                       value: _selectedMaladie,
                       items: [
                         const DropdownMenuItem(
-                            value: null, child: Text('Toutes')),
+                          value: null,
+                          child: Text('Toutes'),
+                        ),
                         ..._maladies.map((m) => DropdownMenuItem(
                               value: m['nom'],
-                              child: Text(m['nom']
-                                  .replaceAll('_', ' ')
-                                  .replaceAll('Tomato ', '')),
+                              child: Text(
+                                m['nom']
+                                    .replaceAll('_', ' ')
+                                    .replaceAll('Tomato ', ''),
+                              ),
                             )),
                       ],
-                      onChanged: (v) =>
-                          setStateDialog(() => _selectedMaladie = v),
+                      onChanged: (value) {
+                        setStateDialog(() => _selectedMaladie = value);
+                      },
                     ),
                     const SizedBox(height: 16),
-                    // Dates
                     Row(
                       children: [
                         Expanded(
@@ -309,12 +452,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 firstDate: DateTime(2020),
                                 lastDate: DateTime.now(),
                               );
-                              if (picked != null)
+                              if (picked != null) {
                                 setStateDialog(() => _startDate = picked);
+                              }
                             },
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 12),
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
                               decoration: BoxDecoration(
                                 color: AppTheme.background,
                                 borderRadius: BorderRadius.circular(12),
@@ -325,8 +471,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   Text(
                                     'Date début',
                                     style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppTheme.textLight),
+                                      fontSize: 12,
+                                      color: AppTheme.textLight,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -355,12 +502,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 firstDate: DateTime(2020),
                                 lastDate: DateTime.now(),
                               );
-                              if (picked != null)
+                              if (picked != null) {
                                 setStateDialog(() => _endDate = picked);
+                              }
                             },
                             child: Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 12),
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
                               decoration: BoxDecoration(
                                 color: AppTheme.background,
                                 borderRadius: BorderRadius.circular(12),
@@ -371,8 +521,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   Text(
                                     'Date fin',
                                     style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppTheme.textLight),
+                                      fontSize: 12,
+                                      color: AppTheme.textLight,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -446,7 +597,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _error != null
+          : _error != null && _items.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -458,14 +609,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           style: TextStyle(color: AppTheme.textMedium)),
                       const SizedBox(height: 16),
                       ElevatedButton(
-                          onPressed: _loadHistory,
-                          child: const Text('Réessayer')),
+                        onPressed: _loadHistory,
+                        child: const Text('Réessayer'),
+                      ),
                     ],
                   ),
                 )
               : _items.isEmpty
                   ? const Center(
-                      child: Text('Aucun élément dans l\'historique'))
+                      child: Text('Aucun élément dans l\'historique'),
+                    )
                   : ListView.builder(
                       padding: const EdgeInsets.all(16),
                       itemCount: _items.length,
@@ -545,11 +698,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: AppTheme.primaryLight.withOpacity(0.1),
+                      color: AppTheme.primaryLight.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(Icons.photo_camera,
-                        size: 18, color: AppTheme.primary),
+                    child: const Icon(
+                      Icons.photo_camera,
+                      size: 18,
+                      color: AppTheme.primary,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -559,29 +715,36 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         Text(
                           'Diagnostic #${item['id']}',
                           style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w600),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                         Text(
                           date,
                           style: TextStyle(
-                              fontSize: 11, color: AppTheme.textLight),
+                            fontSize: 11,
+                            color: AppTheme.textLight,
+                          ),
                         ),
                       ],
                     ),
                   ),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
-                      color: AppTheme.primaryLight.withOpacity(0.15),
+                      color: AppTheme.primaryLight.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Text(
                       '${_formatConfiance(confiance)}%',
                       style: TextStyle(
-                          color: AppTheme.primary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600),
+                        color: AppTheme.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 4),
@@ -597,8 +760,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
               const SizedBox(height: 8),
               Text(
                 maladie,
-                style:
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -610,7 +775,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   Expanded(
                     child: Text(
                       parcelle,
-                      style: TextStyle(fontSize: 11, color: AppTheme.textLight),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.textLight,
+                      ),
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                     ),
@@ -646,7 +814,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ),
       child: InkWell(
         onTap: () {
-          // Construire l'objet complet pour le résumé
           final fullData = {
             'total_frames': item['total_frames'] ?? 0,
             'frames_analysees': item['frames_analysees'] ?? 0,
@@ -661,7 +828,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
             MaterialPageRoute(
               builder: (context) => RealtimeResultScreen(
                 resume: fullData,
-                zones: List<Map<String, dynamic>>.from(fullData['zones'] ?? []),
+                zones: List<Map<String, dynamic>>.from(
+                  fullData['zones'] ?? [],
+                ),
                 sessionId: item['id'],
               ),
             ),
@@ -678,11 +847,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: Colors.purple.withOpacity(0.1),
+                      color: Colors.purple.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(Icons.videocam,
-                        size: 18, color: Colors.purple),
+                    child: const Icon(
+                      Icons.videocam,
+                      size: 18,
+                      color: Colors.purple,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -694,22 +866,27 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             Text(
                               'Session #${item['id']}',
                               style: const TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w600),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 1),
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
                               decoration: BoxDecoration(
-                                color: Colors.purple.withOpacity(0.12),
+                                color: Colors.purple.withValues(alpha: 0.12),
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: const Text(
                                 'Temps réel',
                                 style: TextStyle(
-                                    color: Colors.purple,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w500),
+                                  color: Colors.purple,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
                           ],
@@ -717,7 +894,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         Text(
                           date,
                           style: TextStyle(
-                              fontSize: 11, color: AppTheme.textLight),
+                            fontSize: 11,
+                            color: AppTheme.textLight,
+                          ),
                         ),
                       ],
                     ),
@@ -734,8 +913,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
               const SizedBox(height: 8),
               Text(
                 maladieNames,
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
               ),
@@ -744,7 +925,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 spacing: 6,
                 runSpacing: 4,
                 children: [
-                  _buildInfoChip(Icons.timer, '$duree'),
+                  _buildInfoChip(Icons.timer, duree),
                   _buildInfoChip(Icons.camera_alt, '$frames'),
                   _buildInfoChip(Icons.check_circle, '$analysees'),
                   _buildInfoChip(Icons.percent, '$taux%'),

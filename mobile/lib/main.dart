@@ -104,7 +104,14 @@ class _TomScanAppState extends State<TomScanApp> {
 
     // Si l'utilisateur n'est pas connecté
     if (!_isLoggedIn) {
-      return const LoginScreen();
+      // Forcer un remplacement de la pile de navigation
+      return WillPopScope(
+        onWillPop: () async {
+          // Empêcher le retour en arrière sur LoginScreen
+          return false;
+        },
+        child: const LoginScreen(),
+      );
     }
 
     // Vérifier le rôle de l'utilisateur

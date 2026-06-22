@@ -80,9 +80,6 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
     
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
-        # ============================================================
-        # RÉCUPÉRER TOUTES LES INFORMATIONS DE L'UTILISATEUR
-        # ============================================================
         user = await conn.fetchrow("""
             SELECT 
                 id_utilisateur,
@@ -100,7 +97,6 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
         if not user:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
         
-        # Statistiques
         total_diagnostics = await conn.fetchval("""
             SELECT COUNT(*) FROM diagnostic WHERE id_utilisateur = $1
         """, user_id)
@@ -119,7 +115,6 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
             WHERE d.id_utilisateur = $1
         """, user_id)
         
-        # Répartition par maladie
         maladies = await conn.fetch("""
             SELECT 
                 o.maladie_nom,
@@ -131,7 +126,6 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
             ORDER BY count DESC
         """, user_id)
         
-        # Dernière activité
         derniere_activite = await conn.fetchrow("""
             SELECT date_debut FROM diagnostic
             WHERE id_utilisateur = $1
@@ -139,9 +133,6 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
             LIMIT 1
         """, user_id)
         
-        # ============================================================
-        # RETOURNER TOUTES LES INFORMATIONS
-        # ============================================================
         return {
             "user": {
                 "id": user["id_utilisateur"],
@@ -166,7 +157,7 @@ async def get_user_stats(user_id: int, token: str = Query(...)):
 
 @router.delete("/admin/users/{user_id}")
 async def delete_user(user_id: int, token: str = Query(...)):
-    """Supprime un utilisateur et toutes ses données (admin uniquement)"""
+    """Supprime un utilisateur (ON DELETE CASCADE automatique)"""
     admin_id = await verifier_admin(token)
     
     if user_id == admin_id:
@@ -182,7 +173,7 @@ async def delete_user(user_id: int, token: str = Query(...)):
         if not user:
             raise HTTPException(status_code=404, detail="Utilisateur non trouvé")
         
-        # Supprimer en cascade (les clés étrangères ON DELETE CASCADE feront le travail)
+        # ✅ Suppression automatique (ON DELETE CASCADE fait le reste)
         result = await conn.execute("DELETE FROM utilisateur WHERE id_utilisateur = $1", user_id)
         
         return {"status": "ok", "message": f"Utilisateur {user_id} supprimé"}

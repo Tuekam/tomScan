@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
+import '../services/local_database_service.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 
@@ -28,6 +29,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   String? _errorMessage;
+
+  final LocalDatabaseService _db = LocalDatabaseService();
 
   // Focus nodes
   final FocusNode _nomFocus = FocusNode();
@@ -63,49 +66,56 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final paddingHorizontal =
         isLargeScreen ? 48.0 : (isSmallScreen ? 20.0 : 32.0);
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: EdgeInsets.symmetric(
-            horizontal: paddingHorizontal,
-            vertical: 16,
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: screenHeight - MediaQuery.of(context).padding.top - 32,
+    return WillPopScope(
+      onWillPop: () async {
+        // ✅ Empêcher le retour en arrière depuis la page d'inscription
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: EdgeInsets.symmetric(
+              horizontal: paddingHorizontal,
+              vertical: 16,
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ✅ Header
-                _buildHeader(isSmallScreen),
-                const SizedBox(height: 20),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight:
+                    screenHeight - MediaQuery.of(context).padding.top - 32,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ✅ Header
+                  _buildHeader(isSmallScreen),
+                  const SizedBox(height: 20),
 
-                // ✅ Message d'erreur
-                if (_errorMessage != null) _buildErrorMessage(),
+                  // ✅ Message d'erreur
+                  if (_errorMessage != null) _buildErrorMessage(),
 
-                // ✅ Formulaire
-                _buildNomField(),
-                const SizedBox(height: 16),
-                _buildEmailField(),
-                const SizedBox(height: 16),
-                _buildTelephoneAdresseFields(isSmallScreen),
-                const SizedBox(height: 16),
-                _buildPasswordFields(),
-                const SizedBox(height: 24),
+                  // ✅ Formulaire
+                  _buildNomField(),
+                  const SizedBox(height: 16),
+                  _buildEmailField(),
+                  const SizedBox(height: 16),
+                  _buildTelephoneAdresseFields(isSmallScreen),
+                  const SizedBox(height: 16),
+                  _buildPasswordFields(),
+                  const SizedBox(height: 24),
 
-                // ✅ Bouton
-                _buildRegisterButton(isSmallScreen),
-                const SizedBox(height: 16),
+                  // ✅ Bouton
+                  _buildRegisterButton(isSmallScreen),
+                  const SizedBox(height: 16),
 
-                // ✅ Lien connexion
-                _buildLoginLink(isSmallScreen),
+                  // ✅ Lien connexion
+                  _buildLoginLink(isSmallScreen),
 
-                const SizedBox(height: 8),
-              ],
+                  const SizedBox(height: 8),
+                ],
+              ),
             ),
           ),
         ),
@@ -509,7 +519,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  // 📌 INSCRIPTION
+  // ============================================================
+  // 📌 INSCRIPTION AVEC INITIALISATION DU CACHE LOCAL
+  // ============================================================
   Future<void> _register() async {
     // Validation
     if (_nomController.text.trim().isEmpty) {
@@ -550,17 +562,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       if (response.statusCode == 200) {
         final data = response.data;
+        final userId = data['id_utilisateur'];
+        final role = data['role'] ?? 'agriculteur';
 
+        // ✅ Sauvegarder les données utilisateur
         await AuthService().saveUserData(
           token: data['token'],
-          userId: data['id_utilisateur'],
+          userId: userId,
           nom: data['nom'],
           email: data['email'],
-          role: data['role'] ?? 'agriculteur',
+          role: role,
         );
+
+        // ✅ Initialiser le cache local avec l'ID utilisateur
+        _db.setUserId(userId);
+        debugPrint('📱 Cache local initialisé pour l\'utilisateur $userId');
 
         if (!mounted) return;
 
+        // ✅ Rediriger vers l'accueil (après inscription, c'est un agriculteur)
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(

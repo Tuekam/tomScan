@@ -21,12 +21,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
   bool _isSaving = false;
 
-  // Données utilisateur
   Map<String, dynamic> _userData = {};
   List<Map<String, dynamic>> _parcelles = [];
   List<Map<String, dynamic>> _recentActivities = [];
 
-  // Photo de profil
   File? _profileImage;
   String? _profileImageUrl;
 
@@ -41,7 +39,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final userId = await AuthService().getUserId() ?? 1;
 
-      // Charger les données utilisateur
       final userRes =
           await _dio.get('${AppConfig.baseUrl}/utilisateur/$userId');
       if (userRes.statusCode == 200) {
@@ -49,14 +46,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profileImageUrl = _userData['photo_profil'];
       }
 
-      // Charger les parcelles de l'utilisateur
       final parcelleRes = await _dio
           .get('${AppConfig.baseUrl}/parcelles?id_utilisateur=$userId');
       if (parcelleRes.statusCode == 200) {
         _parcelles = List<Map<String, dynamic>>.from(parcelleRes.data);
       }
 
-      // Charger l'activité récente de l'utilisateur
       await _loadRecentActivities(userId);
 
       setState(() => _isLoading = false);
@@ -68,7 +63,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadRecentActivities(int userId) async {
     try {
-      // Récupérer les diagnostics récents de l'utilisateur (limité à 5)
       final historyRes = await _dio.get(
         '${AppConfig.baseUrl}/history',
         queryParameters: {'user_id': userId, 'limit': 5},
@@ -155,23 +149,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return '${AppConfig.baseUrlImages}${path.replaceFirst('/api/images', '')}';
   }
 
+  // ✅ FORMAT DATE CORRIGÉ
   String _formatDate(String? dateStr) {
-    if (dateStr == null) return 'Date inconnue';
+    if (dateStr == null || dateStr.isEmpty) return 'Date inconnue';
+
     try {
       final date = DateTime.parse(dateStr);
       final now = DateTime.now();
       final difference = now.difference(date);
 
-      if (difference.inDays < 1) {
-        if (difference.inHours < 1) {
-          return 'Il y a ${difference.inMinutes} min';
-        }
-        return 'Il y a ${difference.inHours} h';
-      } else if (difference.inDays < 7) {
-        return 'Il y a ${difference.inDays} j';
-      } else {
+      if (difference.isNegative) {
         return '${date.day}/${date.month}/${date.year}';
       }
+
+      if (difference.inSeconds < 60) {
+        return 'À l\'instant';
+      }
+      if (difference.inMinutes < 60) {
+        return 'Il y a ${difference.inMinutes} min';
+      }
+      if (difference.inHours < 24) {
+        return 'Il y a ${difference.inHours} h';
+      }
+      if (difference.inDays < 7) {
+        return 'Il y a ${difference.inDays} j';
+      }
+      if (difference.inDays < 30) {
+        final weeks = (difference.inDays / 7).floor();
+        return 'Il y a $weeks sem';
+      }
+      if (difference.inDays < 365) {
+        final months = (difference.inDays / 30).floor();
+        return 'Il y a $months mois';
+      }
+      final years = (difference.inDays / 365).floor();
+      return 'Il y a $years an${years > 1 ? 's' : ''}';
     } catch (_) {
       return dateStr;
     }
@@ -231,9 +243,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ==========================================
-                  // CARTE PROFIL UTILISATEUR
-                  // ==========================================
+                  // Carte profil
                   Container(
                     padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
                     decoration: BoxDecoration(
@@ -249,7 +259,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     child: Row(
                       children: [
-                        // Avatar avec possibilité d'ajouter une photo
                         GestureDetector(
                           onTap: _isSaving ? null : _pickProfileImage,
                           child: Stack(
@@ -404,9 +413,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // ==========================================
-                  // INFORMATIONS PERSONNELLES
-                  // ==========================================
+                  // Informations personnelles
                   Container(
                     padding: EdgeInsets.all(isSmallScreen ? 14 : 16),
                     decoration: BoxDecoration(
@@ -469,9 +476,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // ==========================================
-                  // MES PARCELLES
-                  // ==========================================
+                  // Mes parcelles
                   Container(
                     padding: EdgeInsets.all(isSmallScreen ? 14 : 16),
                     decoration: BoxDecoration(
@@ -613,9 +618,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // ==========================================
-                  // ACTIVITÉ RÉCENTE (FILTRÉE PAR UTILISATEUR)
-                  // ==========================================
+                  // Activité récente
                   Container(
                     padding: EdgeInsets.all(isSmallScreen ? 14 : 16),
                     decoration: BoxDecoration(
@@ -693,9 +696,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // ==========================================
-                  // BOUTON DÉCONNEXION
-                  // ==========================================
+                  // Bouton déconnexion
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(

@@ -92,14 +92,30 @@ class ObservationRepository:
         finally:
             await conn.close()
     
-    # ========== NOUVELLES MÉTHODES ==========
+    # ========== NOUVELLE MÉTHODE ==========
+    
+    async def get_observations_by_user(self, id_utilisateur: int) -> list[dict]:
+        """Récupère toutes les observations d'un utilisateur"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            rows = await conn.fetch("""
+                SELECT o.id_observation, o.latitude, o.longitude, o.id_parcelle, o.maladie_nom
+                FROM observation o
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
+                WHERE d.id_utilisateur = $1
+                ORDER BY o.id_observation
+            """, id_utilisateur)
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+    
+    # ========== MÉTHODES EXISTANTES ==========
     
     async def delete_observation(self, id_observation: int) -> bool:
         """Supprime une observation"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             result = await conn.execute("DELETE FROM observation WHERE id_observation = $1", id_observation)
-            # asyncpg retourne "DELETE <num>" 
             affected = int(result.split()[1]) if ' ' in result else 0
             return affected > 0
         finally:

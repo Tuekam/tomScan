@@ -46,6 +46,37 @@ def distance_en_mètres(lat1: float, lon1: float, lat2: float, lon2: float) -> f
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     return R * c
 
+def regrouper_observations(observations, rayon):
+    """Regroupement par chaînage"""
+    if not observations:
+        return []
+    
+    groupes = []
+    observations_restantes = list(observations)
+    
+    while observations_restantes:
+        premiere = observations_restantes.pop(0)
+        groupe = [premiere]
+        
+        i = 0
+        while i < len(observations_restantes):
+            obs = observations_restantes[i]
+            proche = False
+            for g in groupe:
+                if distance_en_mètres(obs["latitude"], obs["longitude"],
+                                      g["latitude"], g["longitude"]) <= rayon:
+                    proche = True
+                    break
+            if proche:
+                groupe.append(observations_restantes.pop(i))
+                i = 0
+            else:
+                i += 1
+        
+        groupes.append(groupe)
+    
+    return groupes
+
 async def contient_plante(image_bytes: bytes) -> bool:
     """Retourne True si YOLO détecte au moins une plante/feuille de tomate"""
     try:
@@ -117,7 +148,7 @@ async def predict(
     # 1. Lecture de l'image
     image_bytes = await image.read()
 
-    # Sauvegarde de l'image sur disque
+    # Sauvegarde de l'image sur disque (toujours)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     extension = image.filename.split('.')[-1] if '.' in image.filename else 'jpg'
     image_filename = f"{uuid.uuid4()}.{extension}"
@@ -126,11 +157,36 @@ async def predict(
     with open(image_path, "wb") as f:
         f.write(image_bytes)
     
-    # 2. Vérification YOLO
+    # 2. Sauvegarde du diagnostic AVANT la vérification YOLO
+    id_diagnostic = await diag_repo.save_diagnostic(id_utilisateur, "PHOTO", id_parcelle)
+    
+    # 3. Vérification YOLO
     if not await contient_plante(image_bytes):
+        # Sauvegarder l'observation "Non identifiable"
+        now = datetime.now()
+        id_observation = await obs_repo.save_observation(
+            id_diagnostic=id_diagnostic,
+            id_maladie=None,
+            timestamp=now,
+            latitude=latitude,
+            longitude=longitude,
+            precision_gps=precision_gps,
+            image_path=image_path,
+            confiance=0.0,
+            maladie_nom="Non identifiable",
+            id_parcelle=id_parcelle
+        )
+        
         return {
             "maladie": "Non identifiable",
             "confiance": 0.0,
+            "id_diagnostic": id_diagnostic,
+            "id_observation": id_observation,
+            "latitude": latitude,
+            "longitude": longitude,
+            "zone_impactee": False,
+            "id_zone": None,
+            "id_parcelle": id_parcelle,
             "message": "Aucune plante de tomate détectée",
             "description": "",
             "symptomes": "",
@@ -138,11 +194,8 @@ async def predict(
             "niveau_gravite": ""
         }
     
-    # 3. Classification ResNet18
+    # 4. Classification ResNet18
     maladie, confiance = await ia_service.classifier(image_bytes)
-
-    # 4. Sauvegarde du diagnostic
-    id_diagnostic = await diag_repo.save_diagnostic(id_utilisateur, "PHOTO", id_parcelle)
 
     # 5. Récupération de l'id de la maladie
     id_maladie = await maladie_repo.get_id_by_nom(maladie)
@@ -152,7 +205,7 @@ async def predict(
     if id_maladie:
         details_maladie = await maladie_repo.get_details_by_id(id_maladie)
 
-    # 7. Sauvegarde de l'observation
+    # 7. Sauvegarde de l'observation (avec la maladie détectée)
     now = datetime.now()
     id_observation = await obs_repo.save_observation(
         id_diagnostic=id_diagnostic,
@@ -181,112 +234,101 @@ async def predict(
     # REGROUPEMENT
     # ============================================================
     
-    # 9. Trouver les observations proches
-    observations_proches = await obs_repo.get_observations_proches(
-        latitude, longitude, RAYON_GROUPEMENT_M, exclude_id=id_observation
-    )
+    # 9. Récupérer TOUTES les observations de l'utilisateur
+    toutes_obs = await obs_repo.get_observations_by_user(id_utilisateur)
+    print(f"📊 Total observations pour l'utilisateur {id_utilisateur}: {len(toutes_obs)}")
     
-    # 10. Ajouter la nouvelle observation au groupe
-    groupe = observations_proches + [{
-        "id_observation": id_observation, 
-        "latitude": latitude, 
-        "longitude": longitude, 
-        "id_parcelle": parcelle_associee,
-        "maladie_nom": maladie
-    }]
+    # 10. Regrouper par chaînage
+    groupes = regrouper_observations(toutes_obs, RAYON_GROUPEMENT_M)
+    print(f"📊 Groupes trouvés: {len(groupes)}")
+    for i, groupe in enumerate(groupes):
+        print(f"   Groupe {i+1}: {len(groupe)} observations")
     
     zone_impactee = False
     id_zone = None
     
-    # 11. Si le groupe atteint le seuil, créer ou mettre à jour une zone
-    if len(groupe) >= SEUIL_CREATION_ZONE:
-        # Calculer le centre de gravité
-        centre_lat = sum(o["latitude"] for o in groupe) / len(groupe)
-        centre_lon = sum(o["longitude"] for o in groupe) / len(groupe)
-        
-        # Déterminer les parcelles concernées
-        parcelles_dans_groupe = set()
-        for obs in groupe:
-            if obs.get("id_parcelle"):
-                parcelles_dans_groupe.add(obs["id_parcelle"])
-        
-        if len(parcelles_dans_groupe) == 1:
-            id_parcelle_associee = list(parcelles_dans_groupe)[0]
-            zone_type = "DANS_PARCELLE"
-        elif len(parcelles_dans_groupe) > 1:
-            id_parcelle_associee = None
-            zone_type = "MULTI_PARCELLES"
-        else:
-            id_parcelle_associee = None
-            zone_type = "HORS_PARCELLE"
-        
-        # Vérifier si une zone existe déjà à proximité
-        id_existant = await zone_repo.zone_existe_proche(
-            centre_lat, centre_lon, RAYON_RECHERCHE_ZONE
-        )
-        
-        if id_existant:
-            # Mettre à jour la zone existante
-            zone_actuelle = await zone_repo.get_zone_by_id(id_existant)
-            if zone_actuelle:
-                nouveau_total = zone_actuelle["nombre_observations"] + 1
-                await zone_repo.mettre_a_jour_zone_simple(
-                    id_existant, nouveau_total, centre_lat, centre_lon, zone_type
-                )
-            id_zone = id_existant
-            print(f"🔄 Zone #{id_existant} mise à jour (total: {nouveau_total} observations)")
-        else:
-            # ============================================================
-            # CRÉER UNE NOUVELLE ZONE AVEC id_utilisateur
-            # ============================================================
-            id_zone = await zone_repo.creer_zone(
-                centre_lat=centre_lat,
-                centre_lon=centre_lon,
-                nombre_obs=len(groupe),
-                id_parcelle=id_parcelle_associee,
-                zone_type=zone_type,
-                id_utilisateur=id_utilisateur  # ← AJOUT ICI
-            )
-            print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type}) pour l'utilisateur {id_utilisateur}")
+    # 11. Pour chaque groupe, vérifier si une zone existe
+    for groupe in groupes:
+        if len(groupe) >= SEUIL_CREATION_ZONE:
+            # Calculer le centre de gravité
+            centre_lat = sum(o["latitude"] for o in groupe) / len(groupe)
+            centre_lon = sum(o["longitude"] for o in groupe) / len(groupe)
             
-            # ============================================================
-            # CRÉER UNE NOTIFICATION POUR LA NOUVELLE ZONE
-            # ============================================================
-            nb_obs = len(groupe)
-            if nb_obs >= 20:
-                titre = "🚨 Zone critique détectée !"
-                message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
-                type_notif = "zone_critique"
-            elif nb_obs >= 10:
-                titre = "⚠️ Zone active détectée"
-                message = f"Une zone infectée active a été détectée avec {nb_obs} observations. Traitement recommandé."
-                type_notif = "zone_creee"
-            else:
-                titre = "📍 Nouvelle zone émergente"
-                message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
-                type_notif = "zone_creee"
-            
-            # Récupérer le nom de la maladie dominante
-            maladies_groupe = {}
+            # Déterminer les parcelles concernées
+            parcelles_dans_groupe = set()
             for obs in groupe:
-                m = obs.get("maladie_nom", "Inconnue")
-                maladies_groupe[m] = maladies_groupe.get(m, 0) + 1
-            maladie_dominante = max(maladies_groupe, key=maladies_groupe.get) if maladies_groupe else "Inconnue"
-            maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
+                if obs.get("id_parcelle"):
+                    parcelles_dans_groupe.add(obs["id_parcelle"])
             
-            # Créer la notification
-            await creer_notification(
-                id_utilisateur=id_utilisateur,
-                titre=titre,
-                message=f"{message} Maladie dominante: {maladie_dominante}.",
-                type=type_notif,
-                id_zone=id_zone,
-                id_parcelle=id_parcelle_associee,
-                latitude=centre_lat,
-                longitude=centre_lon
+            if len(parcelles_dans_groupe) == 1:
+                id_parcelle_associee = list(parcelles_dans_groupe)[0]
+                zone_type = "DANS_PARCELLE"
+            elif len(parcelles_dans_groupe) > 1:
+                id_parcelle_associee = None
+                zone_type = "MULTI_PARCELLES"
+            else:
+                id_parcelle_associee = None
+                zone_type = "HORS_PARCELLE"
+            
+            # Vérifier si une zone existe déjà à proximité
+            id_existant = await zone_repo.zone_existe_proche(
+                centre_lat, centre_lon, RAYON_RECHERCHE_ZONE
             )
-        
-        zone_impactee = True
+            
+            if id_existant:
+                zone_actuelle = await zone_repo.get_zone_by_id(id_existant)
+                if zone_actuelle:
+                    await zone_repo.mettre_a_jour_zone_simple(
+                        id_existant, len(groupe), centre_lat, centre_lon, zone_type
+                    )
+                id_zone = id_existant
+                print(f"🔄 Zone #{id_existant} mise à jour (total: {len(groupe)} observations)")
+            else:
+                id_zone = await zone_repo.creer_zone(
+                    centre_lat=centre_lat,
+                    centre_lon=centre_lon,
+                    nombre_obs=len(groupe),
+                    id_parcelle=id_parcelle_associee,
+                    zone_type=zone_type,
+                    id_utilisateur=id_utilisateur
+                )
+                print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type}) pour l'utilisateur {id_utilisateur}")
+                
+                # Créer une notification
+                nb_obs = len(groupe)
+                if nb_obs >= 20:
+                    titre = "🚨 Zone critique détectée !"
+                    message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
+                    type_notif = "zone_critique"
+                elif nb_obs >= 10:
+                    titre = "⚠️ Zone active détectée"
+                    message = f"Une zone infectée active a été détectée avec {nb_obs} observations. Traitement recommandé."
+                    type_notif = "zone_creee"
+                else:
+                    titre = "📍 Nouvelle zone émergente"
+                    message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
+                    type_notif = "zone_creee"
+                
+                maladies_groupe = {}
+                for obs in groupe:
+                    m = obs.get("maladie_nom", "Inconnue")
+                    maladies_groupe[m] = maladies_groupe.get(m, 0) + 1
+                maladie_dominante = max(maladies_groupe, key=maladies_groupe.get) if maladies_groupe else "Inconnue"
+                maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
+                
+                await creer_notification(
+                    id_utilisateur=id_utilisateur,
+                    titre=titre,
+                    message=f"{message} Maladie dominante: {maladie_dominante}.",
+                    type=type_notif,
+                    id_zone=id_zone,
+                    id_parcelle=id_parcelle_associee,
+                    latitude=centre_lat,
+                    longitude=centre_lon
+                )
+            
+            zone_impactee = True
+            break
 
     # 12. Construction de la réponse
     response_data = {
@@ -301,7 +343,6 @@ async def predict(
         "id_parcelle": parcelle_associee
     }
     
-    # Ajout des détails de la maladie
     if details_maladie:
         response_data["description"] = details_maladie.get("description", "")
         response_data["symptomes"] = details_maladie.get("symptomes", "")
