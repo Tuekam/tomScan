@@ -1,4 +1,3 @@
-// screens/realtime_scan_screen.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -107,9 +106,10 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
         return;
       }
 
+      // ✅ CORRECTION : Résolution HIGH pour meilleure détection
       _cameraController = CameraController(
         cameras[0],
-        ResolutionPreset.medium,
+        ResolutionPreset.high, // ← medium → high
         enableAudio: false,
       );
 
@@ -121,6 +121,8 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       setState(() {
         _isInitialized = true;
       });
+
+      print('📷 Caméra initialisée avec résolution HIGH');
     } catch (e) {
       print('Erreur caméra: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -157,6 +159,9 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       return;
     }
 
+    // Récupérer l'ID de l'utilisateur connecté
+    final userId = await AuthService().getUserId() ?? 1;
+
     setState(() {
       _isScanning = true;
       _totalFrames = 0;
@@ -168,12 +173,9 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
     });
 
     try {
-      // Récupérer l'ID de l'utilisateur connecté
-      final userId = await AuthService().getUserId();
-
       final startRes = await _dio.post(
         '$_baseUrl/realtime/start',
-        queryParameters: {'user_id': userId ?? 1},
+        queryParameters: {'user_id': userId},
       );
       _sessionId = startRes.data['session_id'];
       print('🎬 Session temps réel démarrée: $_sessionId');
@@ -204,7 +206,7 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
       final image = await _cameraController!.takePicture();
       _totalFrames++;
 
-      // Utiliser le GPS Service au lieu de faire un appel direct
+      // Utiliser le GPS Service
       final position = GpsService().currentPosition;
       final lat = position?.latitude ?? 0.0;
       final lon = position?.longitude ?? 0.0;
@@ -282,8 +284,12 @@ class _RealtimeScanScreenState extends State<RealtimeScanScreen> {
     setState(() => _isScanning = false);
 
     try {
+      // Récupérer l'ID de l'utilisateur connecté
+      final userId = await AuthService().getUserId() ?? 1;
+
       final response = await _dio.post(
         '$_baseUrl/realtime/$_sessionId/end',
+        queryParameters: {'user_id': userId},
       );
       final data = response.data;
       if (data['status'] == 'completed' && mounted) {

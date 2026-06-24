@@ -1,7 +1,6 @@
 // screens/realtime_result_screen.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
-import '../services/auth_service.dart';
 import 'map_screen.dart';
 
 class RealtimeResultScreen extends StatelessWidget {
@@ -18,7 +17,6 @@ class RealtimeResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Récupération des valeurs depuis resume
     final totalFrames = resume['total_frames'] ?? 0;
     final framesAnalysees = resume['frames_analysees'] ?? 0;
     final dureeSecondes = resume['duree_secondes'] ?? 0;
@@ -305,7 +303,6 @@ class RealtimeResultScreen extends StatelessWidget {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: () {
-                  // Retourner à la page d'accueil avec l'utilisateur connecté
                   Navigator.pushNamedAndRemoveUntil(
                     context,
                     '/home',
