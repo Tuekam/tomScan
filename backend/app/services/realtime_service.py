@@ -1,4 +1,3 @@
-# backend/app/services/realtime_service.py
 import cv2
 import numpy as np
 from datetime import datetime
@@ -14,7 +13,6 @@ class RealtimeSession:
         self.user_id = user_id 
         self.start_time = datetime.now()
         self.last_frame_time = 0
-        self.positions_scannees: List[Tuple[float, float, datetime]] = []
         self.observations: List[dict] = []
         
         # Statistiques
@@ -22,7 +20,6 @@ class RealtimeSession:
         self.frames_analysees = 0
         self.frames_ignored_rate = 0
         self.frames_ignored_quality = 0
-        self.frames_ignored_gps = 0
     
     @staticmethod
     def distance_en_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -37,36 +34,28 @@ class RealtimeSession:
     
     @staticmethod
     def qualite_image(image_bytes: bytes) -> float:
-        """Score de netteté (0-100)"""
+        """
+        Score de netteté (0-100)
+        ✅ Version tolérante pour le temps réel
+        """
         try:
             nparr = np.frombuffer(image_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
             if img is None:
-                return 0
+                return 50
+            
             laplacian_var = cv2.Laplacian(img, cv2.CV_64F).var()
-            return min(100, max(0, laplacian_var / 10))
+            score = min(100, max(0, laplacian_var / 5))
+            return score
         except Exception:
-            return 0
-    
-    def get_rayon_dedoublonnage(self, precision_gps: float) -> float:
-        """
-        Retourne le rayon de dédoublonnage en fonction de la précision GPS.
-        Les valeurs sont centralisées dans settings.
-        """
-        if precision_gps <= 5.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_PRECIS      # 0.5
-        elif precision_gps <= 15.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_MOYEN       # 2.0
-        elif precision_gps <= 50.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_IMPRECIS    # 5.0
-        else:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_TRES_IMPRECIS  # 10.0
+            return 50
     
     def doit_analyser_frame(self, lat: float, lon: float, current_time: float, 
                             image_bytes: bytes, precision_gps: float = 5.0) -> Tuple[bool, str]:
         """
         Vérifie si une frame doit être analysée.
-        Utilise les seuils configurés dans settings.
+        ✅ Filtre FPS + Qualité uniquement
+        ✅ Plus de dédoublonnage GPS
         """
         self.total_frames += 1
         
@@ -81,18 +70,6 @@ class RealtimeSession:
         if qualite < settings.QUALITE_IMAGE_MIN:
             self.frames_ignored_quality += 1
             return False, "poor_quality"
-        
-        # 3. Vérifier si la position a déjà été scannée
-        rayon = self.get_rayon_dedoublonnage(precision_gps)
-        
-        for (lat2, lon2, _) in self.positions_scannees:
-            distance = self.distance_en_metres(lat, lon, lat2, lon2)
-            if distance <= rayon:
-                self.frames_ignored_gps += 1
-                return False, "already_scanned"
-        
-        # 4. AJOUTER LA POSITION IMMÉDIATEMENT pour éviter les doublons
-        self.positions_scannees.append((lat, lon, datetime.now()))
         
         return True, "ok"
     
@@ -138,16 +115,20 @@ class RealtimeSession:
             "taux_analyse": round(taux_analyse, 1),
             "frames_ignored_rate": self.frames_ignored_rate,
             "frames_ignored_quality": self.frames_ignored_quality,
-            "frames_ignored_gps": self.frames_ignored_gps,
             "maladies_stats": maladies_stats,
             "total_observations": len(self.observations),
             "zones": zones
         }
     
     def _regrouper_observations(self) -> List[dict]:
-        """Regroupe les observations en zones (rayon 1m, seuil 10)"""
+        """
+        Regroupe les observations en zones avec un rayon adaptatif.
+        ✅ Utilise settings.RAYON_GROUPEMENT_M et settings.SEUIL_CREATION_ZONE
+        """
         if not self.observations:
             return []
+        
+        rayon_regroupement = settings.RAYON_GROUPEMENT_M
         
         groupes = []
         observations_restantes = self.observations.copy()
@@ -160,7 +141,7 @@ class RealtimeSession:
                 if self.distance_en_metres(
                     obs["latitude"], obs["longitude"],
                     observations_restantes[i]["latitude"], observations_restantes[i]["longitude"]
-                ) <= settings.RAYON_GROUPEMENT_M:
+                ) <= rayon_regroupement:
                     groupe.append(observations_restantes.pop(i))
                 else:
                     i += 1

@@ -1,5 +1,4 @@
-# backend/app/api/routes/realtime.py
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from datetime import datetime
 import uuid
 import json
@@ -24,14 +23,24 @@ obs_repo = ObservationRepository()
 maladie_repo = MaladieRepository()
 zone_repo = ZoneRepository()
 
-# YOLO pour les bounding boxes
+# YOLO pour la détection de présence
 YOLO_MODEL_PATH = settings.YOLO_MODEL_PATH
 SEUIL_CONFIANCE_YOLO = settings.SEUIL_CONFIANCE_YOLO
+SEUIL_CONFIANCE_RESNET = settings.SEUIL_CONFIANCE_RESNET
+
+print(f"📦 YOLO Model: {YOLO_MODEL_PATH}")
+print(f"📦 Seuil YOLO: {SEUIL_CONFIANCE_YOLO}")
+print(f"📦 Seuil ResNet: {SEUIL_CONFIANCE_RESNET}")
+
 yolo_model = YOLO(YOLO_MODEL_PATH)
 
 # Stockage des sessions
 sessions = {}
 TIMEOUT_SECONDS = settings.TIMEOUT_SESSION_SECONDS
+
+# ============================================================
+# FONCTIONS UTILITAIRES
+# ============================================================
 
 def get_bbox_color(maladie: str) -> str:
     """Couleur associée à la maladie pour les bounding boxes"""
@@ -45,6 +54,27 @@ def get_bbox_color(maladie: str) -> str:
         "Non identifiable": "#6B7280"
     }
     return colors.get(maladie, "#6B7280")
+
+async def contient_plante(image_bytes: bytes) -> bool:
+    """
+    ✅ VERSION CORRIGÉE : Filtre binaire comme dans predict.py
+    Retourne True si YOLO détecte au moins une plante/feuille de tomate
+    """
+    try:
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        results = yolo_model(img, verbose=False)
+        
+        for r in results:
+            if r.boxes is not None:
+                for box in r.boxes:
+                    if box.conf.item() >= SEUIL_CONFIANCE_YOLO:
+                        print(f"   🎯 YOLO: plante détectée (conf: {box.conf.item():.2f})")
+                        return True
+        return False
+    except Exception as e:
+        print(f"   ❌ Erreur YOLO: {e}")
+        return False
 
 async def creer_notification(
     id_utilisateur: int,
@@ -68,8 +98,12 @@ async def creer_notification(
     finally:
         await conn.close()
 
+# ============================================================
+# ROUTES
+# ============================================================
+
 @router.post("/realtime/start")
-async def start_realtime_session(user_id: int = Form(1)):
+async def start_realtime_session(user_id: int = Query(...)):
     """Démarre une nouvelle session temps réel"""
     session_id = str(uuid.uuid4())
     sessions[session_id] = RealtimeSession(session_id, user_id)
@@ -84,7 +118,12 @@ async def process_frame(
     longitude: float = Form(...),
     precision_gps: float = Form(5.0)
 ):
-    """Reçoit et analyse une frame avec détection des plantes"""
+    """
+    ✅ VERSION CORRIGÉE : Alignée sur la logique du mode photo
+    1. YOLO = Filtre de présence (comme predict.py)
+    2. ResNet = Classification de l'image entière (comme predict.py)
+    3. Pas de découpe YOLO, pas de rejet "trop grand"
+    """
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session invalide ou expirée")
     
@@ -94,7 +133,9 @@ async def process_frame(
     
     print(f"📍 FRAME #{session.total_frames + 1} -> Lat: {latitude:.6f}, Lon: {longitude:.6f}, Précision: {precision_gps:.1f}m")
     
-    # Vérifier si la frame doit être analysée
+    # ============================================================
+    # 1. FILTRE : TAUX (FPS)
+    # ============================================================
     doit_analyser, raison = session.doit_analyser_frame(
         latitude, longitude, current_time, image_bytes, precision_gps
     )
@@ -107,104 +148,119 @@ async def process_frame(
             "message": "Frame ignorée"
         }
     
-    # --- Analyse avec YOLO ---
+    # ============================================================
+    # 2. YOLO = FILTRE DE PRÉSENCE (comme predict.py)
+    # ============================================================
+    if not await contient_plante(image_bytes):
+        print(f"   ❌ Aucune plante de tomate détectée (YOLO)")
+        return {
+            "status": "ignored",
+            "reason": "no_plant",
+            "message": "Aucune plante de tomate détectée"
+        }
+    
+    # ============================================================
+    # 3. RESNET = CLASSIFICATION DE L'IMAGE ENTIÈRE (comme predict.py)
+    # ============================================================
     try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        maladie, confiance = await ia_service.classifier(image_bytes)
         
-        results = yolo_model(img, verbose=False)
-        detections = []
+        print(f"   🧠 ResNet: {maladie} ({confiance:.1f}%)")
         
-        for r in results:
-            if r.boxes is not None:
-                for box in r.boxes:
-                    if box.conf.item() >= SEUIL_CONFIANCE_YOLO:
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        w = x2 - x1
-                        h = y2 - y1
-                        
-                        if w < 30 or h < 30:
-                            continue
-                        if w > img.shape[1] * 0.8 or h > img.shape[0] * 0.8:
-                            continue
-                        
-                        aspect_ratio = w / h
-                        if aspect_ratio < 0.3 or aspect_ratio > 2.5:
-                            continue
-                        
-                        plant_img = img[int(y1):int(y2), int(x1):int(x2)]
-                        _, plant_bytes = cv2.imencode('.jpg', plant_img)
-                        
-                        maladie, confiance = await ia_service.classifier(plant_bytes.tobytes())
-                        
-                        if maladie == "Non identifiable" or confiance < 30.0:
-                            continue
-                        
-                        detections.append({
-                            "maladie": maladie,
-                            "confiance": round(confiance, 2),
-                            "x": int(x1),
-                            "y": int(y1),
-                            "width": int(w),
-                            "height": int(h),
-                            "bbox_color": get_bbox_color(maladie)
-                        })
-        
-        if detections:
-            detection_principale = detections[0]
-            maladie = detection_principale["maladie"]
-            confiance = detection_principale["confiance"]
-            
-            print(f"   ✅ ANALYSÉE: {maladie} ({confiance:.1f}%)")
-            
-            # ✅ UTILISER session.user_id
-            id_diagnostic = await diag_repo.save_diagnostic(session.user_id, "TEMPS_REEL", None)
-            id_maladie = await maladie_repo.get_id_by_nom(maladie)
-            now = datetime.now()
-            
-            id_observation = await obs_repo.save_observation(
-                id_diagnostic=id_diagnostic,
-                id_maladie=id_maladie,
-                timestamp=now,
-                latitude=latitude,
-                longitude=longitude,
-                precision_gps=precision_gps,
-                image_path="",
-                confiance=confiance,
-                maladie_nom=maladie,
-                id_parcelle=None
-            )
-            
-            session.ajouter_analyse(
-                latitude, longitude, maladie, confiance,
-                id_observation, id_diagnostic
-            )
-            
-            return {
-                "status": "analyzed",
-                "maladie": maladie,
-                "confiance": round(confiance, 2),
-                "id_observation": id_observation,
-                "detections": detections,
-                "position": {"lat": latitude, "lon": longitude}
-            }
-        else:
-            print(f"   ❌ Aucune plante de tomate détectée")
+        if maladie == "Non identifiable" or confiance < SEUIL_CONFIANCE_RESNET:
+            print(f"   ❌ Rejeté: {maladie} ({confiance:.1f}%) < seuil {SEUIL_CONFIANCE_RESNET}")
             return {
                 "status": "ignored",
-                "reason": "no_plant",
-                "message": "Aucune plante de tomate détectée"
+                "reason": "low_confidence",
+                "message": f"Confiance trop faible: {confiance:.1f}%"
             }
+        
+        # ============================================================
+        # 4. SUCCÈS ! SAUVEGARDE
+        # ============================================================
+        print(f"   ✅ ANALYSÉE: {maladie} ({confiance:.1f}%)")
+        
+        # Sauvegarder le diagnostic
+        id_diagnostic = await diag_repo.save_diagnostic(session.user_id, "TEMPS_REEL", None)
+        id_maladie = await maladie_repo.get_id_by_nom(maladie)
+        now = datetime.now()
+        
+        # Sauvegarder l'observation
+        id_observation = await obs_repo.save_observation(
+            id_diagnostic=id_diagnostic,
+            id_maladie=id_maladie,
+            timestamp=now,
+            latitude=latitude,
+            longitude=longitude,
+            precision_gps=precision_gps,
+            image_path="",
+            confiance=confiance,
+            maladie_nom=maladie,
+            id_parcelle=None
+        )
+        
+        # Ajouter à la session pour regroupement
+        session.ajouter_analyse(
+            latitude, longitude, maladie, confiance,
+            id_observation, id_diagnostic
+        )
+        
+        # ============================================================
+        # 5. BOUNDING BOXES (optionnel - pour l'affichage uniquement)
+        # ============================================================
+        # On peut toujours renvoyer des bounding boxes pour l'affichage
+        # même si ResNet analyse l'image entière
+        detections = []
+        try:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            results = yolo_model(img, verbose=False)
+            
+            for r in results:
+                if r.boxes is not None:
+                    for box in r.boxes:
+                        if box.conf.item() >= SEUIL_CONFIANCE_YOLO:
+                            x1, y1, x2, y2 = box.xyxy[0].tolist()
+                            w = x2 - x1
+                            h = y2 - y1
+                            # ✅ Plus de filtres restrictifs pour l'affichage
+                            detections.append({
+                                "maladie": maladie,  # ← On met la maladie ResNet
+                                "confiance": round(confiance, 2),
+                                "x": int(x1),
+                                "y": int(y1),
+                                "width": int(w),
+                                "height": int(h),
+                                "bbox_color": get_bbox_color(maladie)
+                            })
+                            break  # ← Une seule boîte suffit pour l'affichage
+        except Exception as e:
+            print(f"   ⚠️ Erreur bounding boxes: {e}")
+        
+        return {
+            "status": "analyzed",
+            "maladie": maladie,
+            "confiance": round(confiance, 2),
+            "id_observation": id_observation,
+            "id_diagnostic": id_diagnostic,
+            "detections": detections,  # ← Pour l'affichage uniquement
+            "position": {"lat": latitude, "lon": longitude}
+        }
             
     except Exception as e:
         print(f"   ❌ Erreur analyse: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
             "reason": str(e)
         }
 
 @router.post("/realtime/{session_id}/end")
-async def end_realtime_session(session_id: str, user_id: int = Form(1)):
+async def end_realtime_session(
+    session_id: str,
+    user_id: int = Query(...)
+):
     """Termine la session et sauvegarde le résumé en base"""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session invalide")
@@ -212,12 +268,13 @@ async def end_realtime_session(session_id: str, user_id: int = Form(1)):
     session = sessions[session_id]
     resume = session.get_resume()
     
+    final_user_id = user_id if user_id else session.user_id
+    
     print(f"\n📊 RÉSUMÉ DE LA SESSION #{session_id[:8]}")
     print(f"   📸 Frames totales: {resume['total_frames']}")
     print(f"   ✅ Frames analysées: {resume['frames_analysees']}")
     print(f"   ⏭️ Ignorées (rate): {resume['frames_ignored_rate']}")
     print(f"   📷 Ignorées (qualité): {resume['frames_ignored_quality']}")
-    print(f"   📍 Ignorées (doublon GPS): {resume['frames_ignored_gps']}")
     
     zones_crees = []
     for zone_data in resume["zones"]:
@@ -228,11 +285,11 @@ async def end_realtime_session(session_id: str, user_id: int = Form(1)):
             centre_lon=zone_data["centre_lon"],
             nombre_obs=zone_data["observations"],
             id_parcelle=None,
-            zone_type=zone_type
+            zone_type=zone_type,
+            id_utilisateur=final_user_id
         )
         
         nb_obs = zone_data["observations"]
-        
         if nb_obs >= 20:
             titre = f"🚨 Zone critique détectée !"
             message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
@@ -252,9 +309,8 @@ async def end_realtime_session(session_id: str, user_id: int = Form(1)):
             maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
             message = f"{message} Maladie dominante: {maladie_dominante}."
         
-        # ✅ UTILISER user_id
         await creer_notification(
-            id_utilisateur=user_id,
+            id_utilisateur=final_user_id,
             titre=titre,
             message=message,
             type=type_notif,
@@ -279,12 +335,11 @@ async def end_realtime_session(session_id: str, user_id: int = Form(1)):
         """)
         
         if table_exists:
-            # ✅ UTILISER user_id
             await conn.execute("""
                 INSERT INTO session 
                     (id_utilisateur, date_debut, date_fin, mode, total_frames, frames_analysees, zones_crees, resume)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """, user_id, session.start_time, datetime.now(), "TEMPS_REEL",
+            """, final_user_id, session.start_time, datetime.now(), "TEMPS_REEL",
                 resume["total_frames"], resume["frames_analysees"], len(zones_crees),
                 json.dumps({
                     "maladies_stats": resume["maladies_stats"],
@@ -297,10 +352,11 @@ async def end_realtime_session(session_id: str, user_id: int = Form(1)):
         else:
             print("⚠️ Table 'session' non trouvée, skip sauvegarde")
             
+    except Exception as e:
+        print(f"❌ Erreur sauvegarde session: {e}")
     finally:
         await conn.close()
     
-    # Supprimer la session
     del sessions[session_id]
     
     return {
@@ -322,6 +378,5 @@ async def get_session_status(session_id: str):
         "frames_analysees": session.frames_analysees,
         "frames_ignored_rate": session.frames_ignored_rate,
         "frames_ignored_quality": session.frames_ignored_quality,
-        "frames_ignored_gps": session.frames_ignored_gps,
         "observations": len(session.observations)
     }

@@ -1,5 +1,5 @@
 # backend/app/api/routes/sessions.py
-from fastapi import APIRouter, HTTPException, Query, Form
+from fastapi import APIRouter, HTTPException, Query
 import asyncpg
 import json
 from app.core.config import settings
@@ -12,6 +12,7 @@ async def get_sessions(
     limit: int = Query(50),
     offset: int = Query(0)
 ):
+    """Récupère toutes les sessions d'un utilisateur"""
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         rows = await conn.fetch("""
@@ -56,6 +57,7 @@ async def get_sessions(
 
 @router.get("/sessions/{id_session}")
 async def get_session_detail(id_session: int):
+    """Récupère les détails d'une session spécifique"""
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         row = await conn.fetchrow("""
@@ -103,7 +105,7 @@ async def get_session_detail(id_session: int):
 @router.delete("/sessions/{id_session}")
 async def delete_session(
     id_session: int,
-    user_id: int = Form(1)  # ← AJOUTER
+    user_id: int = Query(1)  # ✅ Changé de Form à Query
 ):
     """
     Supprime une session après vérification que l'utilisateur en est le propriétaire
