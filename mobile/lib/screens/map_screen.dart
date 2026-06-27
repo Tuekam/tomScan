@@ -1,10 +1,11 @@
-// screens/map_screen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
@@ -40,6 +41,7 @@ class _MapScreenState extends State<MapScreen>
   List<ZoneData> _zones = [];
   bool _isLoadingData = true;
   String? _errorMessage;
+  bool _isLocating = false;
 
   late AnimationController _animationController;
 
@@ -61,19 +63,37 @@ class _MapScreenState extends State<MapScreen>
 
   int _userId = 1;
 
+  static const String _lastPositionKey = 'last_gps_position';
+
   @override
   void initState() {
     super.initState();
+
     _initialCenter =
         (widget.initialLatitude != null && widget.initialLongitude != null)
             ? LatLng(widget.initialLatitude!, widget.initialLongitude!)
             : _defaultCenter;
     _initialZoom = (widget.initialLatitude != null) ? 18 : 13;
+
     _mapController = MapController();
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
+
+    _getLastPosition().then((lastPos) {
+      if (lastPos != null && mounted) {
+        print(
+            '📍 Chargement de la dernière position: ${lastPos.latitude}, ${lastPos.longitude}');
+        setState(() {
+          _initialCenter = lastPos;
+          _initialZoom = 16;
+          _userPosition = lastPos;
+          _userMarker = _buildUserMarker(lastPos);
+        });
+        _mapController.move(lastPos, 16);
+      }
+    });
 
     if (widget.highlightZoneId != null) {
       _highlightMarker = Marker(
@@ -106,7 +126,7 @@ class _MapScreenState extends State<MapScreen>
   Future<void> _loadUserId() async {
     _userId = await AuthService().getUserId() ?? 1;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkPermissionsAndLoad();
+      _loadData();
     });
   }
 
@@ -117,6 +137,374 @@ class _MapScreenState extends State<MapScreen>
     super.dispose();
   }
 
+  // ============================================================
+  // SAUVEGARDE ET CHARGEMENT DE LA DERNIÈRE POSITION
+  // ============================================================
+  Future<void> _saveLastPosition(double lat, double lon) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = json.encode({'lat': lat, 'lon': lon});
+      await prefs.setString(_lastPositionKey, data);
+      print('💾 Dernière position sauvegardée: $lat, $lon');
+    } catch (e) {
+      print('❌ Erreur sauvegarde position: $e');
+    }
+  }
+
+  Future<LatLng?> _getLastPosition() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final data = prefs.getString(_lastPositionKey);
+      if (data != null) {
+        final map = json.decode(data) as Map<String, dynamic>;
+        return LatLng(map['lat'] as double, map['lon'] as double);
+      }
+    } catch (e) {
+      print('❌ Erreur chargement position: $e');
+    }
+    return null;
+  }
+
+  // ============================================================
+  // CHARGEMENT DES DONNÉES
+  // ============================================================
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoadingData = true;
+      _errorMessage = null;
+    });
+
+    await Future.wait([
+      _loadZones(),
+      _loadUserParcels(),
+    ]);
+
+    await _getUserLocation();
+
+    if (_userPosition != null && mounted) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _mapController.move(_userPosition!, 17);
+        print(
+            '📍 Carte FORCÉE sur position: ${_userPosition!.latitude}, ${_userPosition!.longitude}');
+      });
+    }
+
+    setState(() {
+      _isLoadingData = false;
+    });
+
+    if (widget.highlightZoneId != null) {
+      final zone = _zones.firstWhere(
+        (z) => z.id == widget.highlightZoneId,
+        orElse: () => ZoneData(
+          id: -1,
+          latitude: 0.0,
+          longitude: 0.0,
+          rayon: 0.0,
+          nombreObservations: 0,
+          couleur: 'orange',
+          zoneType: 'HORS_PARCELLE',
+          parcelleNom: null,
+          popupText: '',
+        ),
+      );
+      if (zone.id != -1) {
+        Future.delayed(const Duration(milliseconds: 600), () {
+          _mapController.move(
+            LatLng(zone.latitude, zone.longitude),
+            18,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  '📍 Zone #${zone.id} - ${zone.zoneType == "DANS_PARCELLE" ? "Dans parcelle" : "Hors parcelle"}',
+                ),
+                duration: const Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        });
+      }
+    }
+  }
+
+  // ============================================================
+  // GPS
+  // ============================================================
+  Future<void> _getUserLocation() async {
+    setState(() => _isLocating = true);
+
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        final lastPos = await _getLastPosition();
+        if (lastPos != null) {
+          setState(() {
+            _userPosition = lastPos;
+            _userMarker = _buildUserMarker(lastPos);
+            _errorMessage =
+                '📍 Position basée sur la dernière localisation connue';
+            _isLocating = false;
+          });
+          if (widget.initialLatitude == null && mounted) {
+            _mapController.move(lastPos, 16);
+          }
+          return;
+        }
+
+        setState(() {
+          _errorMessage = '📍 GPS désactivé. Activez-le dans les paramètres.';
+          _isLocating = false;
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          final lastPos = await _getLastPosition();
+          if (lastPos != null) {
+            setState(() {
+              _userPosition = lastPos;
+              _userMarker = _buildUserMarker(lastPos);
+              _errorMessage =
+                  '📍 Position basée sur la dernière localisation connue';
+              _isLocating = false;
+            });
+            if (widget.initialLatitude == null && mounted) {
+              _mapController.move(lastPos, 16);
+            }
+            return;
+          }
+          setState(() {
+            _errorMessage = 'Permission de localisation refusée';
+            _isLocating = false;
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        final lastPos = await _getLastPosition();
+        if (lastPos != null) {
+          setState(() {
+            _userPosition = lastPos;
+            _userMarker = _buildUserMarker(lastPos);
+            _errorMessage =
+                '📍 Position basée sur la dernière localisation connue';
+            _isLocating = false;
+          });
+          if (widget.initialLatitude == null && mounted) {
+            _mapController.move(lastPos, 16);
+          }
+          return;
+        }
+        setState(() {
+          _errorMessage = 'Permission de localisation refusée définitivement';
+          _isLocating = false;
+        });
+        return;
+      }
+
+      const locationSettings = LocationSettings(
+        accuracy: LocationAccuracy.best,
+        timeLimit: Duration(seconds: 30),
+      );
+
+      Position position = await Geolocator.getCurrentPosition(
+        locationSettings: locationSettings,
+      );
+
+      final userLatLng = LatLng(position.latitude, position.longitude);
+      print('📍 Position GPS: ${position.latitude}, ${position.longitude}');
+
+      await _saveLastPosition(position.latitude, position.longitude);
+
+      setState(() {
+        _userPosition = userLatLng;
+        _userMarker = _buildUserMarker(userLatLng);
+        _errorMessage = null;
+        _isLocating = false;
+        _initialCenter = userLatLng;
+        _initialZoom = 17;
+      });
+
+      if (mounted) {
+        _mapController.move(userLatLng, 17);
+        print(
+            '📍 Carte centrée sur position GPS: ${position.latitude}, ${position.longitude}');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '📍 Position trouvée (précision: ${position.accuracy.toStringAsFixed(1)}m)'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Erreur GPS: $e');
+
+      final lastPos = await _getLastPosition();
+      if (lastPos != null) {
+        setState(() {
+          _userPosition = lastPos;
+          _userMarker = _buildUserMarker(lastPos);
+          _errorMessage =
+              '📍 Position basée sur la dernière localisation connue';
+          _isLocating = false;
+        });
+        if (widget.initialLatitude == null && mounted) {
+          _mapController.move(lastPos, 16);
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content:
+                  const Text('📍 Utilisation de la dernière position connue'),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _errorMessage =
+            'Impossible d\'obtenir votre position. Vérifiez le GPS.';
+        _isLocating = false;
+      });
+    }
+  }
+
+  Marker _buildUserMarker(LatLng position) {
+    return Marker(
+      point: position,
+      width: 30,
+      height: 30,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.blue.withValues(alpha: 0.3),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.blue, width: 3),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.blue.withValues(alpha: 0.4),
+              blurRadius: 12,
+              spreadRadius: 4,
+            ),
+          ],
+        ),
+        child: const Icon(Icons.my_location, color: Colors.blue, size: 16),
+      ),
+    );
+  }
+
+  // ============================================================
+  // CHARGEMENT DES ZONES
+  // ============================================================
+  Future<void> _loadZones() async {
+    try {
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/zones',
+        queryParameters: {'user_id': _userId},
+      );
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+        final features = data['features'] as List? ?? [];
+
+        final List<ZoneData> zones = [];
+        final List<Marker> markers = [];
+
+        for (var feature in features) {
+          final geometry = feature['geometry'];
+          final properties = feature['properties'];
+
+          if (geometry != null && properties != null) {
+            final coordinates = geometry['coordinates'] as List?;
+            if (coordinates != null && coordinates.length >= 2) {
+              final lon = coordinates[0] as double;
+              final lat = coordinates[1] as double;
+              final id = properties['id'] as int? ?? 0;
+              final rayon = properties['rayon'] as double? ?? 3.0;
+              final nombreObs = properties['nombre_observations'] as int? ?? 0;
+              final couleur = properties['couleur'] as String? ?? 'orange';
+              final zoneType =
+                  properties['zone_type'] as String? ?? 'HORS_PARCELLE';
+              final parcelleNom = properties['parcelle_nom'] as String?;
+              final popupText =
+                  properties['popup_text'] as String? ?? 'Zone #$id';
+
+              final zone = ZoneData(
+                id: id,
+                latitude: lat,
+                longitude: lon,
+                rayon: rayon,
+                nombreObservations: nombreObs,
+                couleur: couleur,
+                zoneType: zoneType,
+                parcelleNom: parcelleNom,
+                popupText: popupText,
+              );
+              zones.add(zone);
+
+              markers.add(
+                Marker(
+                  point: LatLng(lat, lon),
+                  width: _getMarkerSize(nombreObs, zoneType),
+                  height: _getMarkerSize(nombreObs, zoneType),
+                  child: _buildZoneMarker(zone),
+                ),
+              );
+            }
+          }
+        }
+
+        setState(() {
+          _zones = zones;
+          _zoneMarkers.clear();
+          _zoneMarkers.addAll(markers);
+        });
+
+        if (widget.initialLatitude != null && widget.initialLongitude != null) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _mapController.move(
+              LatLng(widget.initialLatitude!, widget.initialLongitude!),
+              18,
+            );
+            if (widget.highlightMaladie != null && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                      '📍 Diagnostic #${widget.highlightDiagnosticId}: ${widget.highlightMaladie!.replaceAll('_', ' ')}'),
+                  duration: const Duration(seconds: 3),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Erreur chargement des zones: $e';
+      });
+    }
+  }
+
+  // ============================================================
+  // CHARGEMENT DES PARCELLES
+  // ============================================================
   Future<void> _loadUserParcels() async {
     try {
       final response = await _dio.get(
@@ -221,214 +609,9 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
-  Future<void> _checkPermissionsAndLoad() async {
-    final status = await Permission.location.request();
-    if (status.isGranted) {
-      await _getUserLocation();
-    } else {
-      setState(() {
-        _errorMessage = 'Permission de localisation refusée';
-      });
-    }
-
-    await Future.wait([
-      _loadZones(),
-      _loadUserParcels(),
-    ]);
-    setState(() {
-      _isLoadingData = false;
-    });
-
-    if (widget.highlightZoneId != null) {
-      final zone = _zones.firstWhere(
-        (z) => z.id == widget.highlightZoneId,
-        orElse: () => ZoneData(
-          id: -1,
-          latitude: 0.0,
-          longitude: 0.0,
-          rayon: 0.0,
-          nombreObservations: 0,
-          couleur: 'orange',
-          zoneType: 'HORS_PARCELLE',
-          parcelleNom: null,
-          popupText: '',
-        ),
-      );
-      if (zone.id != -1) {
-        Future.delayed(const Duration(milliseconds: 600), () {
-          _mapController.move(
-            LatLng(zone.latitude, zone.longitude),
-            18,
-          );
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  '📍 Zone #${zone.id} - ${zone.zoneType == "DANS_PARCELLE" ? "Dans parcelle" : "Hors parcelle"}',
-                ),
-                duration: const Duration(seconds: 3),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        });
-      }
-    }
-  }
-
-  // 🔥 CORRECTION : Forcer une nouvelle position GPS + zoom maximum
-  Future<void> _getUserLocation() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        setState(() {
-          _errorMessage = 'La localisation est désactivée';
-        });
-        return;
-      }
-
-      // 🔥 Forcer une nouvelle position (pas de cache)
-      final locationSettings = const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        timeLimit: Duration(seconds: 10),
-      );
-
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: locationSettings,
-      );
-
-      final userLatLng = LatLng(position.latitude, position.longitude);
-      print('📍 Position GPS: ${position.latitude}, ${position.longitude}');
-
-      setState(() {
-        _userPosition = userLatLng;
-        _userMarker = Marker(
-          point: userLatLng,
-          width: 24,
-          height: 24,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.blue.withValues(alpha: 0.4),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.blue.withValues(alpha: 0.3),
-                  blurRadius: 8,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: const Icon(Icons.my_location, color: Colors.blue, size: 14),
-          ),
-        );
-      });
-
-      // 🔥 Zoom maximum sur la position
-      if (widget.initialLatitude == null && mounted) {
-        _mapController.move(userLatLng, 18);
-        print('📍 Carte centrée sur position avec zoom 18');
-      }
-    } catch (e) {
-      print('Erreur GPS: $e');
-      setState(() {
-        _errorMessage = 'Impossible d\'obtenir votre position: $e';
-      });
-    }
-  }
-
-  Future<void> _loadZones() async {
-    try {
-      final response = await _dio.get(
-        '${AppConfig.baseUrl}/zones',
-        queryParameters: {'user_id': _userId},
-      );
-
-      if (response.statusCode == 200) {
-        final data = response.data;
-        final features = data['features'] as List? ?? [];
-
-        final List<ZoneData> zones = [];
-        final List<Marker> markers = [];
-
-        for (var feature in features) {
-          final geometry = feature['geometry'];
-          final properties = feature['properties'];
-
-          if (geometry != null && properties != null) {
-            final coordinates = geometry['coordinates'] as List?;
-            if (coordinates != null && coordinates.length >= 2) {
-              final lon = coordinates[0] as double;
-              final lat = coordinates[1] as double;
-              final id = properties['id'] as int? ?? 0;
-              final rayon = properties['rayon'] as double? ?? 3.0;
-              final nombreObs = properties['nombre_observations'] as int? ?? 0;
-              final couleur = properties['couleur'] as String? ?? 'orange';
-              final zoneType =
-                  properties['zone_type'] as String? ?? 'HORS_PARCELLE';
-              final parcelleNom = properties['parcelle_nom'] as String?;
-              final popupText =
-                  properties['popup_text'] as String? ?? 'Zone #$id';
-
-              final zone = ZoneData(
-                id: id,
-                latitude: lat,
-                longitude: lon,
-                rayon: rayon,
-                nombreObservations: nombreObs,
-                couleur: couleur,
-                zoneType: zoneType,
-                parcelleNom: parcelleNom,
-                popupText: popupText,
-              );
-              zones.add(zone);
-
-              markers.add(
-                Marker(
-                  point: LatLng(lat, lon),
-                  width: _getMarkerSize(nombreObs, zoneType),
-                  height: _getMarkerSize(nombreObs, zoneType),
-                  child: _buildZoneMarker(zone),
-                ),
-              );
-            }
-          }
-        }
-
-        setState(() {
-          _zones = zones;
-          _zoneMarkers.clear();
-          _zoneMarkers.addAll(markers);
-        });
-
-        if (widget.initialLatitude != null && widget.initialLongitude != null) {
-          Future.delayed(const Duration(milliseconds: 500), () {
-            _mapController.move(
-              LatLng(widget.initialLatitude!, widget.initialLongitude!),
-              18,
-            );
-            if (widget.highlightMaladie != null && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                      '📍 Diagnostic #${widget.highlightDiagnosticId}: ${widget.highlightMaladie!.replaceAll('_', ' ')}'),
-                  duration: const Duration(seconds: 3),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            }
-          });
-        }
-      } else {
-        throw Exception('Erreur de chargement des zones');
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Impossible de charger les zones: $e';
-      });
-    }
-  }
-
+  // ============================================================
+  // MARQUEURS
+  // ============================================================
   double _getMarkerSize(int nombreObs, String zoneType) {
     if (zoneType == 'HORS_PARCELLE') return 36;
     if (nombreObs >= 20) return 48;
@@ -499,11 +682,12 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
-  // 🔥 CORRECTION : Forcer une nouvelle position + zoom maximum au clic
+  // ============================================================
+  // CENTRAGE SUR L'UTILISATEUR
+  // ============================================================
   Future<void> _centerOnUser() async {
-    await _getUserLocation();
-    if (_userPosition != null && mounted) {
-      _mapController.move(_userPosition!, 18);
+    if (_userPosition != null) {
+      _mapController.move(_userPosition!, 17);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Centrage sur votre position'),
@@ -512,16 +696,24 @@ class _MapScreenState extends State<MapScreen>
         ),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Impossible d\'obtenir votre position'),
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await _getUserLocation();
+      if (_userPosition != null && mounted) {
+        _mapController.move(_userPosition!, 17);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Impossible d\'obtenir votre position'),
+            backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
+  // ============================================================
+  // DESSIN DE PARCELLES
+  // ============================================================
   void _startDrawingParcel() {
     setState(() {
       _isDrawingParcel = true;
@@ -637,6 +829,9 @@ class _MapScreenState extends State<MapScreen>
     });
   }
 
+  // ============================================================
+  // SUPPRESSION PARCELLE
+  // ============================================================
   Future<void> _deleteParcel(int id, String nom) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -658,7 +853,13 @@ class _MapScreenState extends State<MapScreen>
     if (confirm != true) return;
 
     try {
-      await _dio.delete('${AppConfig.baseUrl}/parcelles/$id');
+      final userId = await AuthService().getUserId() ?? 1;
+
+      await _dio.delete(
+        '${AppConfig.baseUrl}/parcelles/$id',
+        queryParameters: {'user_id': userId},
+      );
+
       await _loadUserParcels();
       await _loadZones();
       if (mounted) {
@@ -753,6 +954,87 @@ class _MapScreenState extends State<MapScreen>
     _mapController.move(LatLng(centerLat, centerLon), 17);
   }
 
+  // ============================================================
+  // ✅ SUPPRESSION ZONE - NOUVEAU
+  // ============================================================
+  Future<void> _deleteZone(
+      int idZone, int observations, String zoneType) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          title: const Text('Supprimer la zone'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Voulez-vous vraiment supprimer la zone #$idZone ?',
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Cette zone contient $observations observations.\n'
+                'Cette action est irréversible.',
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Annuler'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.danger,
+              ),
+              child: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final userId = await AuthService().getUserId() ?? 1;
+
+      await _dio.delete(
+        '${AppConfig.baseUrl}/zones/$idZone',
+        queryParameters: {'user_id': userId},
+      );
+
+      // Recharger les zones
+      await _loadZones();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Zone supprimée avec succès'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  // ============================================================
+  // AFFICHAGE DES DÉTAILS D'UNE ZONE - AVEC BOUTON SUPPRIMER
+  // ============================================================
   void _showZoneDetails(ZoneData zone) {
     String titre = 'Zone #${zone.id}';
     String sousTitre = '';
@@ -803,20 +1085,41 @@ class _MapScreenState extends State<MapScreen>
                   '${zone.rayon.toStringAsFixed(1)} mètres'),
               _buildDetailRow(Icons.info, 'Niveau', _getNiveauAlerte(zone)),
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _mapController.move(
-                        LatLng(zone.latitude, zone.longitude), 16);
-                  },
-                  icon: const Icon(Icons.center_focus_strong),
-                  label: const Text('Centrer la carte'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
+              Row(
+                children: [
+                  // Bouton Centrer
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _mapController.move(
+                            LatLng(zone.latitude, zone.longitude), 16);
+                      },
+                      icon: const Icon(Icons.center_focus_strong),
+                      label: const Text('Centrer'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primary,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  // ✅ Bouton Supprimer
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _deleteZone(
+                            zone.id, zone.nombreObservations, zone.zoneType);
+                      },
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      label: const Text('Supprimer',
+                          style: TextStyle(color: Colors.red)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -832,6 +1135,9 @@ class _MapScreenState extends State<MapScreen>
     return "Émergent";
   }
 
+  // ============================================================
+  // BUILD
+  // ============================================================
   @override
   Widget build(BuildContext context) {
     final allMarkers = <Marker>[
@@ -908,10 +1214,7 @@ class _MapScreenState extends State<MapScreen>
               color: AppTheme.primary),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () {
-              _loadZones();
-              _loadUserParcels();
-            },
+            onPressed: _loadData,
             color: AppTheme.primary,
           ),
         ],
@@ -940,24 +1243,104 @@ class _MapScreenState extends State<MapScreen>
               MarkerLayer(markers: [...allMarkers, ...drawingMarkers]),
             ],
           ),
-          if (_isLoadingData)
-            const Positioned(
+          if (_isLocating)
+            Positioned(
+              top: 70,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text('Recherche de votre position...'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (_errorMessage != null && _userPosition == null && !_isLocating)
+            Positioned(
+              bottom: 100,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      _errorMessage!.contains('dernière localisation')
+                          ? Icons.gps_fixed
+                          : Icons.gps_off,
+                      size: 40,
+                      color: _errorMessage!.contains('dernière localisation')
+                          ? Colors.orange
+                          : Colors.orange,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _errorMessage!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey[700]),
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _loadData,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Réessayer'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (_isLoadingData && !_isLocating)
+            Positioned(
               top: 16,
               left: 16,
               child: Material(
                 elevation: 4,
-                borderRadius: BorderRadius.all(Radius.circular(20)),
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
+                      const SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2)),
-                      SizedBox(width: 8),
-                      Text('Chargement des données...'),
+                      const SizedBox(width: 8),
+                      const Text('Chargement des données...'),
                     ],
                   ),
                 ),
@@ -1143,6 +1526,9 @@ class _MapScreenState extends State<MapScreen>
     );
   }
 
+  // ============================================================
+  // LÉGENDE
+  // ============================================================
   void _showLegendDialog() {
     showDialog(
       context: context,

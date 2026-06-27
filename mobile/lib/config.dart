@@ -9,8 +9,8 @@ class AppConfig {
 
   // Mode temps réel
   static const int fpsCible = 10;
-  static const double qualiteImageMin = 12.0; // ← Synchronisé avec backend
+  static const double qualiteImageMin = 15.0; // ← Synchronisé avec backend
 
   // Filtres GPS
-  static const double gpsPrecisionSeuil = 20.0;
+  static const double gpsPrecisionSeuil = 1000.0;
 }

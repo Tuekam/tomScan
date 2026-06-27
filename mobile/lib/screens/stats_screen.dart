@@ -1,7 +1,9 @@
-// screens/stats_screen.dart
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:share_plus/share_plus.dart';
 import '../theme.dart';
 import '../config.dart';
 import '../services/auth_service.dart';
@@ -18,6 +20,7 @@ class _StatsScreenState extends State<StatsScreen> {
   final Dio _dio = Dio();
 
   bool _isLoading = true;
+  bool _isExporting = false;
   String? _error;
 
   Map<String, dynamic> _stats = {};
@@ -125,10 +128,102 @@ class _StatsScreenState extends State<StatsScreen> {
     _loadStats();
   }
 
+  // ============================================================
+  // EXPORT DES ZONES EN CSV
+  // ============================================================
+  Future<void> _exportZones() async {
+    if (_isExporting) return;
+
+    setState(() => _isExporting = true);
+
+    try {
+      final userId = await _getUserId() ?? 1;
+
+      final queryParams = {
+        'user_id': userId,
+        'periode': _selectedPeriode,
+        if (_selectedParcelleId != null) 'parcelle_id': _selectedParcelleId,
+        if (_selectedMaladie != null) 'maladie': _selectedMaladie,
+      };
+
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/export/zones',
+        queryParameters: queryParams,
+        options: Options(
+          responseType: ResponseType.bytes,
+          receiveTimeout: const Duration(seconds: 60),
+        ),
+      );
+
+      if (response.statusCode == 200) {
+        final bytes = response.data as List<int>;
+
+        final now = DateTime.now();
+        String twoDigits(int n) => n.toString().padLeft(2, '0');
+        String filename =
+            'zones_infectees_${now.year}${twoDigits(now.month)}${twoDigits(now.day)}_${twoDigits(now.hour)}${twoDigits(now.minute)}.csv';
+        final disposition = response.headers['content-disposition']?.first;
+        if (disposition != null && disposition.contains('filename=')) {
+          final match = RegExp(r'filename=([^;]+)').firstMatch(disposition);
+          if (match != null) {
+            filename = match.group(1)!.replaceAll('"', '');
+          }
+        }
+
+        await Share.shareXFiles(
+          [
+            XFile.fromData(
+              Uint8List.fromList(bytes),
+              name: filename,
+              mimeType: 'text/csv',
+            )
+          ],
+          text: '📊 Export des zones infectées - TomScan',
+        );
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Export terminé: $filename'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Erreur lors de l\'export');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Erreur export: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isExporting = false);
+      }
+    }
+  }
+
+  // ============================================================
+  // ✅ ZONE DETAIL - CORRIGÉ AVEC user_id
+  // ============================================================
   Future<void> _showZoneDetail(Map<String, dynamic> zone) async {
     try {
-      final response =
-          await _dio.get('${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}');
+      // ✅ Récupérer l'ID de l'utilisateur
+      final userId = await _getUserId() ?? 1;
+
+      // ✅ Envoyer user_id en query param
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}',
+        queryParameters: {'user_id': userId},
+      );
 
       if (response.statusCode == 200 && mounted) {
         final detail = response.data;
@@ -475,9 +570,24 @@ class _StatsScreenState extends State<StatsScreen> {
       appBar: AppBar(
         title: const Text('Statistiques'),
         actions: [
+          // EXPORT
+          IconButton(
+            icon: _isExporting
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download),
+            onPressed: _isExporting ? null : _exportZones,
+            tooltip: 'Exporter les zones en CSV',
+            color: AppTheme.primary,
+          ),
+          // RAFRAÎCHIR
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadStats,
+            color: AppTheme.primary,
           ),
         ],
       ),

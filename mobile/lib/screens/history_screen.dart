@@ -1,4 +1,3 @@
-// screens/history_screen.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
@@ -220,6 +219,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  // ============================================================
+  // SUPPRESSION CORRIGÉE
+  // ============================================================
   Future<void> _deleteItem(Map<String, dynamic> item) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -281,31 +283,48 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (confirm != true) return;
 
     try {
-      final endpoint = item['type'] == 'photo'
-          ? '/diagnostics/${item['id']}'
-          : '/sessions/${item['id']}';
+      // ✅ Récupérer l'ID de l'utilisateur connecté
+      final userId = await AuthService().getUserId();
+      if (userId == null) {
+        throw Exception('Utilisateur non connecté');
+      }
 
-      await _dio.delete('${AppConfig.baseUrl}$endpoint');
+      final itemType = item['type'] ?? 'photo';
+      final itemId = item['id'];
 
-      // Supprimer également de la base locale
+      // ✅ Construire l'endpoint avec user_id en query param
+      String endpoint;
+      if (itemType == 'photo') {
+        endpoint = '${AppConfig.baseUrl}/diagnostics/$itemId';
+      } else {
+        endpoint = '${AppConfig.baseUrl}/sessions/$itemId';
+      }
+
+      // ✅ Envoyer la requête avec user_id
+      await _dio.delete(
+        endpoint,
+        queryParameters: {'user_id': userId},
+      );
+
+      // ✅ Supprimer également de la base locale
       final localId = item['_local_id'];
       if (localId != null) {
         await _db.deleteHistoryItem(localId);
       } else {
-        await _db.deleteHistoryItemByServerId(item['id']);
+        await _db.deleteHistoryItemByServerId(itemId);
       }
 
       if (mounted) {
         setState(() {
-          _items.removeWhere((e) => e['id'] == item['id']);
+          _items.removeWhere((e) => e['id'] == itemId);
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              item['type'] == 'photo'
-                  ? 'Diagnostic #${item['id']} supprimé'
-                  : 'Session #${item['id']} supprimée',
+              itemType == 'photo'
+                  ? 'Diagnostic #$itemId supprimé'
+                  : 'Session #$itemId supprimée',
             ),
             backgroundColor: Colors.green,
             behavior: SnackBarBehavior.floating,
@@ -318,9 +337,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
     } catch (e) {
       if (mounted) {
+        // ✅ Meilleur message d'erreur
+        String errorMessage = 'Erreur lors de la suppression';
+        if (e is DioException) {
+          if (e.response?.statusCode == 403) {
+            errorMessage =
+                'Vous n\'avez pas l\'autorisation de supprimer cet élément';
+          } else if (e.response?.statusCode == 404) {
+            errorMessage = 'Élément non trouvé';
+          } else {
+            errorMessage =
+                e.response?.data['detail'] ?? e.message ?? 'Erreur inconnue';
+          }
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erreur: $e'),
+            content: Text('Erreur: $errorMessage'),
             backgroundColor: AppTheme.danger,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
