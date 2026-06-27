@@ -1,9 +1,10 @@
-# backend/app/api/routes/zones.py
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 import asyncpg
 from app.core.config import settings
+from app.repositories.zone_repository import ZoneRepository
 
 router = APIRouter()
+zone_repo = ZoneRepository()
 
 @router.get("/zones")
 async def get_zones(user_id: int = Query(1)):
@@ -84,3 +85,25 @@ async def get_zones(user_id: int = Query(1)):
         }
     finally:
         await conn.close()
+
+
+# ============================================================
+# ✅ NOUVELLE ROUTE : SUPPRIMER UNE ZONE
+# ============================================================
+@router.delete("/zones/{id_zone}")
+async def delete_zone(
+    id_zone: int,
+    user_id: int = Query(..., description="ID de l'utilisateur propriétaire")
+):
+    """
+    Supprime une zone après vérification que l'utilisateur en est le propriétaire
+    """
+    try:
+        success = await zone_repo.supprimer_zone(id_zone, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Zone non trouvée")
+        
+        return {"status": "ok", "message": f"Zone #{id_zone} supprimée"}
+    except Exception as e:
+        print(f"❌ Erreur suppression zone: {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")

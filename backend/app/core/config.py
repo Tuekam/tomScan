@@ -12,8 +12,8 @@ class Settings:
     YOLO_MODEL_PATH: str = os.getenv("YOLO_MODEL_PATH", "ml/yolo_plante_tomate.pt")
     
     # Seuils IA - OPTIMISÉS
-    SEUIL_CONFIANCE_YOLO: float = float(os.getenv("SEUIL_CONFIANCE_YOLO", "0.25"))    # ← Filtre de présence
-    SEUIL_CONFIANCE_RESNET: float = float(os.getenv("SEUIL_CONFIANCE_RESNET", "0.4")) # ← Classification
+    SEUIL_CONFIANCE_YOLO: float = float(os.getenv("SEUIL_CONFIANCE_YOLO", "0.9"))    # ← Filtre de présence
+    SEUIL_CONFIANCE_RESNET: float = float(os.getenv("SEUIL_CONFIANCE_RESNET", "0.5")) # ← Classification
     
     # Règles métier
     RAYON_GROUPEMENT_M: float = float(os.getenv("RAYON_GROUPEMENT_M", "3.0"))
@@ -22,7 +22,7 @@ class Settings:
     
     # FPS et qualité - OPTIMISÉS
     FPS_CIBLE: int = int(os.getenv("FPS_CIBLE", "10"))
-    QUALITE_IMAGE_MIN: float = float(os.getenv("QUALITE_IMAGE_MIN", "12.0"))  # ← Plus tolérant
+    QUALITE_IMAGE_MIN: float = float(os.getenv("QUALITE_IMAGE_MIN", "15.0"))  # ← Plus tolérant
     
     # Timeout session
     TIMEOUT_SESSION_SECONDS: int = int(os.getenv("TIMEOUT_SESSION_SECONDS", "900"))

@@ -1,11 +1,12 @@
-# backend/app/repositories/zone_repository.py
 import asyncpg
 from app.core.config import settings
 
 class ZoneRepository:
     
-    async def zone_existe_proche(self, lat: float, lon: float, rayon_m: float = 1.0) -> int | None:
+    async def zone_existe_proche(self, lat: float, lon: float, rayon_m: float = None) -> int | None:
         """Vérifie si une zone existe à proximité (rayon en mètres)"""
+        if rayon_m is None:
+            rayon_m = settings.RAYON_GROUPEMENT_M
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             row = await conn.fetchrow("""
@@ -29,13 +30,15 @@ class ZoneRepository:
         """Crée une nouvelle zone infectée avec l'utilisateur associé"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
+            # ✅ Utiliser le rayon depuis settings
+            rayon = settings.RAYON_GROUPEMENT_M
             row = await conn.fetchrow("""
                 INSERT INTO zone_infectee 
                     (centre_latitude, centre_longitude, rayon, nombre_observations, id_parcelle, zone_type, id_utilisateur)
-                VALUES ($1, $2, 1.0, $3, $4, $5, $6)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id_zone
-            """, centre_lat, centre_lon, nombre_obs, id_parcelle, zone_type, id_utilisateur)
-            print(f"   ✅ Nouvelle zone #{row['id_zone']} créée ({zone_type}) pour l'utilisateur {id_utilisateur}")
+            """, centre_lat, centre_lon, rayon, nombre_obs, id_parcelle, zone_type, id_utilisateur)
+            print(f"   ✅ Nouvelle zone #{row['id_zone']} créée ({zone_type}) avec rayon {rayon}m pour l'utilisateur {id_utilisateur}")
             return row['id_zone']
         finally:
             await conn.close()
@@ -59,6 +62,7 @@ class ZoneRepository:
                 new_lon = (ancienne['centre_longitude'] * ancienne['nombre_observations'] + 
                            nouveau_centre_lon * nouvelles_obs) / total_obs
                 
+                # ✅ Garder le rayon existant ou utiliser le rayon par défaut
                 if zone_type:
                     await conn.execute("""
                         UPDATE zone_infectee 
@@ -127,14 +131,12 @@ class ZoneRepository:
         finally:
             await conn.close()
     
-    # ========== MÉTHODES EXISTANTES ==========
-    
     async def get_zone_by_id(self, id_zone: int) -> dict | None:
         """Récupère une zone par son ID"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             row = await conn.fetchrow("""
-                SELECT id_zone, nombre_observations, centre_latitude, centre_longitude, zone_type, id_utilisateur
+                SELECT id_zone, nombre_observations, centre_latitude, centre_longitude, rayon, zone_type, id_utilisateur
                 FROM zone_infectee
                 WHERE id_zone = $1
             """, id_zone)
@@ -211,5 +213,37 @@ class ZoneRepository:
             """, nb_obs, centre_lat, centre_lon, id_zone)
             
             print(f"🔄 Zone #{id_zone} mise à jour: {nb_obs} observations")
+        finally:
+            await conn.close()
+
+    # ============================================================
+    # ✅ SUPPRIMER UNE ZONE - AVEC SUPPRESSION DES NOTIFICATIONS
+    # ============================================================
+    async def supprimer_zone(self, id_zone: int, user_id: int) -> bool:
+        """
+        Supprime une zone et toutes les notifications liées
+        Retourne True si supprimée, False si non trouvée
+        """
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            # Vérifier que la zone appartient à l'utilisateur
+            row = await conn.fetchrow(
+                "SELECT id_zone FROM zone_infectee WHERE id_zone = $1 AND id_utilisateur = $2",
+                id_zone, user_id
+            )
+            if not row:
+                return False
+            
+            # ✅ 1. Supprimer les notifications liées à cette zone
+            await conn.execute(
+                "DELETE FROM notification WHERE id_zone = $1",
+                id_zone
+            )
+            print(f"🗑️ Notifications liées à la zone #{id_zone} supprimées")
+            
+            # ✅ 2. Supprimer la zone
+            await conn.execute("DELETE FROM zone_infectee WHERE id_zone = $1", id_zone)
+            print(f"🗑️ Zone #{id_zone} supprimée (utilisateur: {user_id})")
+            return True
         finally:
             await conn.close()

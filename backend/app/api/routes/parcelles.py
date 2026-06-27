@@ -1,5 +1,4 @@
-# backend/app/api/routes/parcelles.py
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Form, Query
 from pydantic import BaseModel
 from typing import List, Tuple
 from app.repositories.parcelle_repository import ParcelleRepository
@@ -11,6 +10,9 @@ class ParcelleCreate(BaseModel):
     points: List[Tuple[float, float]]  # (latitude, longitude)
     id_utilisateur: int = 1
 
+# ============================================================
+# POST - Créer une parcelle
+# ============================================================
 @router.post("/parcelles")
 async def create_parcelle(parcelle: ParcelleCreate):
     repo = ParcelleRepository()
@@ -19,11 +21,17 @@ async def create_parcelle(parcelle: ParcelleCreate):
     id_parcelle = await repo.creer_parcelle(parcelle.id_utilisateur, parcelle.nom, parcelle.points)
     return {"status": "ok", "message": "Parcelle créée", "id": id_parcelle}
 
+# ============================================================
+# GET - Récupérer les parcelles d'un utilisateur
+# ============================================================
 @router.get("/parcelles")
-async def get_parcelles(id_utilisateur: int = 1):
+async def get_parcelles(id_utilisateur: int = Query(1)):
     repo = ParcelleRepository()
     return await repo.get_parcelles(id_utilisateur)
 
+# ============================================================
+# GET - Récupérer une parcelle spécifique
+# ============================================================
 @router.get("/parcelles/{id}")
 async def get_parcelle(id: int):
     repo = ParcelleRepository()
@@ -32,26 +40,33 @@ async def get_parcelle(id: int):
         raise HTTPException(status_code=404, detail="Parcelle non trouvée")
     return parcelle
 
+# ============================================================
+# GET - Statistiques d'une parcelle
+# ============================================================
 @router.get("/parcelles/{id}/stats")
 async def get_parcelle_stats(id: int):
     repo = ParcelleRepository()
     return await repo.calculer_taux_infection(id)
 
+# ============================================================
+# ✅ DELETE CORRIGÉ - user_id en Query (obligatoire)
+# ============================================================
 @router.delete("/parcelles/{id_parcelle}")
 async def delete_parcelle(
     id_parcelle: int,
-    user_id: int = Form(1)  # ← AJOUTER
+    user_id: int = Query(..., description="ID de l'utilisateur propriétaire")
 ):
     """
     Supprime une parcelle après vérification que l'utilisateur en est le propriétaire
     """
     repo = ParcelleRepository()
     
-    # Vérifier que la parcelle appartient à l'utilisateur
+    # Vérifier que la parcelle existe
     parcelle = await repo.get_parcelle_by_id(id_parcelle)
     if not parcelle:
         raise HTTPException(status_code=404, detail="Parcelle non trouvée")
     
+    # Vérifier que la parcelle appartient à l'utilisateur
     if parcelle['id_utilisateur'] != user_id:
         raise HTTPException(status_code=403, detail="Accès non autorisé à cette parcelle")
     
@@ -59,4 +74,4 @@ async def delete_parcelle(
     if not success:
         raise HTTPException(status_code=404, detail="Parcelle non trouvée")
     
-    return {"status": "ok", "message": "Parcelle supprimée"}
+    return {"status": "ok", "message": f"Parcelle #{id_parcelle} supprimée"}

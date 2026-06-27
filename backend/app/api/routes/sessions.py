@@ -1,5 +1,4 @@
-# backend/app/api/routes/sessions.py
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 import asyncpg
 import json
 from app.core.config import settings
@@ -35,6 +34,7 @@ async def get_sessions(
         result = []
         for row in rows:
             item = {
+                "id": row["id_session"],
                 "id_session": row["id_session"],
                 "date_debut": row["date_debut"].isoformat() if row["date_debut"] else None,
                 "date_fin": row["date_fin"].isoformat() if row["date_fin"] else None,
@@ -56,7 +56,10 @@ async def get_sessions(
 
 
 @router.get("/sessions/{id_session}")
-async def get_session_detail(id_session: int):
+async def get_session_detail(
+    id_session: int,
+    user_id: int = Query(1)
+):
     """Récupère les détails d'une session spécifique"""
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
@@ -73,8 +76,8 @@ async def get_session_detail(id_session: int):
                 resume,
                 EXTRACT(EPOCH FROM (date_fin - date_debut)) as duree_secondes
             FROM session
-            WHERE id_session = $1
-        """, id_session)
+            WHERE id_session = $1 AND id_utilisateur = $2
+        """, id_session, user_id)
         
         if not row:
             raise HTTPException(status_code=404, detail="Session non trouvée")
@@ -105,7 +108,7 @@ async def get_session_detail(id_session: int):
 @router.delete("/sessions/{id_session}")
 async def delete_session(
     id_session: int,
-    user_id: int = Query(1)  # ✅ Changé de Form à Query
+    user_id: int = Query(...)  # ← RENDU OBLIGATOIRE (sans valeur par défaut)
 ):
     """
     Supprime une session après vérification que l'utilisateur en est le propriétaire
@@ -120,9 +123,12 @@ async def delete_session(
         if not row:
             raise HTTPException(status_code=403, detail="Accès non autorisé à cette session")
         
+        # Supprimer la session
         result = await conn.execute("DELETE FROM session WHERE id_session = $1", id_session)
+        
         if int(result.split()[-1]) == 0:
             raise HTTPException(status_code=404, detail="Session non trouvée")
-        return {"status": "ok", "message": "Session supprimée"}
+        
+        return {"status": "ok", "message": f"Session #{id_session} supprimée"}
     finally:
         await conn.close()

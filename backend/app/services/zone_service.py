@@ -1,214 +1,213 @@
-# backend/app/services/realtime_service.py
-import cv2
-import numpy as np
+# backend/app/services/zone_service.py
+import math
 import asyncpg
-from app.core.config import settings
-from datetime import datetime
-from math import radians, sin, cos, sqrt, atan2
-from typing import List, Tuple
+from app.repositories.zone_repository import ZoneRepository
+from app.repositories.observation_repository import ObservationRepository
 from app.core.config import settings
 
+class ZoneService:
+    def __init__(self):
+        self.zone_repo = ZoneRepository()
+        self.obs_repo = ObservationRepository()
 
-class RealtimeSession:
-    """Gestion d'une session de scan temps réel"""
-    
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.start_time = datetime.now()
-        self.last_frame_time = 0
-        self.positions_scannees: List[Tuple[float, float, datetime]] = []
-        self.observations: List[dict] = []
-        
-        # Statistiques
-        self.total_frames = 0
-        self.frames_analysees = 0
-        self.frames_ignored_rate = 0
-        self.frames_ignored_quality = 0
-        self.frames_ignored_gps = 0
-    
-    @staticmethod
-    def distance_en_metres(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Distance entre deux points GPS (Haversine)"""
-        R = 6371000
-        phi1 = radians(lat1)
-        phi2 = radians(lat2)
-        dphi = radians(lat2 - lat1)
-        dlambda = radians(lon2 - lon1)
-        a = sin(dphi/2)**2 + cos(phi1) * cos(phi2) * sin(dlambda/2)**2
-        return R * 2 * atan2(sqrt(a), sqrt(1-a))
-    
-    @staticmethod
-    def qualite_image(image_bytes: bytes) -> float:
-        """Score de netteté (0-100)"""
+    def distance_en_mètres(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Formule de Haversine pour calculer la distance entre deux points GPS"""
+        R = 6371000  # Rayon terrestre en mètres
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+
+        a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+    async def trouver_parcelle_contenant_point(self, lat: float, lon: float) -> int | None:
+        """Trouve la parcelle qui contient ce point géographique"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-            if img is None:
-                return 0
-            laplacian_var = cv2.Laplacian(img, cv2.CV_64F).var()
-            return min(100, max(0, laplacian_var / 10))
-        except Exception:
-            return 0
-    
-    def get_rayon_dedoublonnage(self, precision_gps: float) -> float:
-        """
-        Retourne le rayon de dédoublonnage en fonction de la précision GPS.
-        Utilise les valeurs de settings.
-        """
-        if precision_gps <= 10.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_PRECIS
-        elif precision_gps <= 20.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_MOYEN
-        elif precision_gps <= 50.0:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_IMPRECIS
-        else:
-            return settings.RAYON_DEDOUBLONNAGE_GPS_TRES_IMPRECIS
-    
-    def doit_analyser_frame(self, lat: float, lon: float, current_time: float, 
-                            image_bytes: bytes, precision_gps: float = 5.0,
-                            qualite_min: float = None) -> Tuple[bool, str]:
-        """
-        Vérifie si une frame doit être analysée.
-        Utilise les valeurs de settings pour les seuils.
-        """
-        if qualite_min is None:
-            qualite_min = settings.QUALITE_IMAGE_MIN
-        
-        self.total_frames += 1
-        
-        # 1. Vérifier le taux (utilise settings.FPS_CIBLE)
-        interval_min = 1.0 / settings.FPS_CIBLE
-        if current_time - self.last_frame_time < interval_min:
-            self.frames_ignored_rate += 1
-            return False, "rate_limit"
-        
-        # 2. Vérifier la qualité de l'image
-        qualite = self.qualite_image(image_bytes)
-        if qualite < qualite_min:
-            self.frames_ignored_quality += 1
-            return False, "poor_quality"
-        
-        # 3. Vérifier si la position a déjà été scannée (rayon adaptatif)
-        rayon = self.get_rayon_dedoublonnage(precision_gps)
-        
-        for (lat2, lon2, _) in self.positions_scannees:
-            distance = self.distance_en_metres(lat, lon, lat2, lon2)
-            if distance <= rayon:
-                self.frames_ignored_gps += 1
-                return False, "already_scanned"
-        
-        # 4. Ajouter la position immédiatement pour éviter les doublons
-        self.positions_scannees.append((lat, lon, datetime.now()))
-        
-        return True, "ok"
-    
-    def ajouter_analyse(self, lat: float, lon: float, maladie: str, confiance: float, 
-                        id_observation: int = None, id_diagnostic: int = None):
-        """Ajoute une observation à la session"""
-        now = datetime.now()
-        self.last_frame_time = now.timestamp()
-        self.frames_analysees += 1
-        
-        self.observations.append({
-            "latitude": lat,
-            "longitude": lon,
-            "maladie": maladie,
-            "confiance": confiance,
-            "id_observation": id_observation,
-            "id_diagnostic": id_diagnostic,
-            "timestamp": now.isoformat()
-        })
-    
-    def get_resume(self) -> dict:
-        """Génère un résumé détaillé de la session"""
-        duree = (datetime.now() - self.start_time).total_seconds()
-        
-        taux_analyse = 0
-        if self.total_frames > 0:
-            taux_analyse = (self.frames_analysees / self.total_frames) * 100
-        
-        # Statistiques par maladie
-        maladies_stats = {}
-        for obs in self.observations:
-            m = obs.get("maladie", "Inconnue")
-            maladies_stats[m] = maladies_stats.get(m, 0) + 1
-        
-        # Regrouper les observations en zones (utilise settings)
-        zones = self._regrouper_observations()
-        
-        return {
-            "session_id": self.session_id,
-            "duree_secondes": round(duree, 1),
-            "total_frames": self.total_frames,
-            "frames_analysees": self.frames_analysees,
-            "taux_analyse": round(taux_analyse, 1),
-            "frames_ignored_rate": self.frames_ignored_rate,
-            "frames_ignored_quality": self.frames_ignored_quality,
-            "frames_ignored_gps": self.frames_ignored_gps,
-            "maladies_stats": maladies_stats,
-            "total_observations": len(self.observations),
-            "zones": zones
-        }
-    
-    def _regrouper_observations(self) -> List[dict]:
-        """Regroupe les observations en zones (utilise settings)"""
-        if not self.observations:
-            return []
-        
-        rayon = settings.RAYON_GROUPEMENT_M
-        seuil = settings.SEUIL_CREATION_ZONE
-        
-        groupes = []
-        observations_restantes = self.observations.copy()
-        
-        while observations_restantes:
-            obs = observations_restantes.pop(0)
-            groupe = [obs]
-            i = 0
-            while i < len(observations_restantes):
-                if self.distance_en_metres(
-                    obs["latitude"], obs["longitude"],
-                    observations_restantes[i]["latitude"], observations_restantes[i]["longitude"]
-                ) <= rayon:
-                    groupe.append(observations_restantes.pop(i))
-                else:
-                    i += 1
-            
-            if len(groupe) >= seuil:
-                centre_lat = sum(o["latitude"] for o in groupe) / len(groupe)
-                centre_lon = sum(o["longitude"] for o in groupe) / len(groupe)
-                maladies = {}
-                for o in groupe:
-                    m = o.get("maladie", "Inconnue")
-                    maladies[m] = maladies.get(m, 0) + 1
-                
-                groupes.append({
-                    "centre_lat": centre_lat,
-                    "centre_lon": centre_lon,
-                    "observations": len(groupe),
-                    "maladies": maladies
-                })
-        
-        return 
-    
+            row = await conn.fetchrow("""
+                SELECT id_parcelle 
+                FROM parcelle 
+                WHERE ST_Contains(
+                    polygone, 
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)
+                )
+                LIMIT 1
+            """, lon, lat)  # longitude, latitude
+            return row['id_parcelle'] if row else None
+        finally:
+            await conn.close()
 
-async def creer_notification(
-    id_utilisateur: int,
-    titre: str,
-    message: str,
-    type: str,
-    id_zone: int = None,
-    id_parcelle: int = None,
-    latitude: float = None,
-    longitude: float = None
-):
-    """Crée une notification pour l'utilisateur"""
-    conn = await asyncpg.connect(settings.DATABASE_URL)
-    try:
-        await conn.execute("""
-            INSERT INTO notification 
-                (id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        """, id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
-    finally:
-        await conn.close()
+    async def trouver_parcelles_autour_point(self, lat: float, lon: float, rayon_m: float = 1.0) -> list:
+        """Trouve toutes les parcelles dans un rayon autour du point"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            rows = await conn.fetch("""
+                SELECT DISTINCT id_parcelle, nom
+                FROM parcelle
+                WHERE ST_DWithin(
+                    polygone,
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326),
+                    $3
+                )
+            """, lon, lat, rayon_m)
+            return [dict(row) for row in rows]
+        finally:
+            await conn.close()
+
+    async def regrouper_observations_avec_parcelles(self, nouvelle_obs: dict, id_utilisateur: int = 1):
+        """Regroupe les observations et détermine les parcelles concernées"""
+        
+        # 1. Récupérer les observations existantes proches
+        observations_proches = await self.obs_repo.get_observations_proches(
+            nouvelle_obs["latitude"], 
+            nouvelle_obs["longitude"], 
+            rayon_m=settings.RAYON_GROUPEMENT_M
+        )
+        
+        toutes_obs = observations_proches + [nouvelle_obs]
+        
+        # 2. Déterminer les parcelles concernées par ces observations
+        parcelles_concernees = set()
+        
+        for obs in toutes_obs:
+            parcelle_id = await self.trouver_parcelle_contenant_point(
+                obs["latitude"], obs["longitude"]
+            )
+            if parcelle_id:
+                parcelles_concernees.add(parcelle_id)
+        
+        # 3. Si on a assez d'observations, créer ou mettre à jour une zone
+        if len(toutes_obs) >= settings.SEUIL_CREATION_ZONE:
+            # Calculer le centre de gravité
+            centre_lat = sum(o["latitude"] for o in toutes_obs) / len(toutes_obs)
+            centre_lon = sum(o["longitude"] for o in toutes_obs) / len(toutes_obs)
+            
+            # Déterminer le type de zone
+            if len(parcelles_concernees) == 0:
+                zone_type = "HORS_PARCELLE"
+            elif len(parcelles_concernees) == 1:
+                zone_type = "DANS_PARCELLE"
+            else:
+                zone_type = "MULTI_PARCELLES"
+            
+            # Récupérer l'ID de parcelle (si une seule)
+            id_parcelle = list(parcelles_concernees)[0] if len(parcelles_concernees) == 1 else None
+            
+            # Vérifier si une zone existe déjà
+            id_existant = await self.zone_repo.zone_existe_proche(
+                centre_lat, centre_lon, settings.RAYON_RECHERCHE_ZONE
+            )
+            
+            if id_existant:
+                # Mettre à jour la zone existante
+                zone_actuelle = await self.zone_repo.get_zone_by_id(id_existant)
+                if zone_actuelle:
+                    nouveau_total = zone_actuelle["nombre_observations"] + len(toutes_obs)
+                    await self.zone_repo.mettre_a_jour_zone_simple(
+                        id_existant, 
+                        nouveau_total, 
+                        centre_lat, 
+                        centre_lon, 
+                        zone_type
+                    )
+                id_zone = id_existant
+                print(f"🔄 Zone #{id_existant} mise à jour (total: {nouveau_total} observations)")
+            else:
+                # Créer une nouvelle zone
+                id_zone = await self.zone_repo.creer_zone(
+                    centre_lat=centre_lat,
+                    centre_lon=centre_lon,
+                    nombre_obs=len(toutes_obs),
+                    id_parcelle=id_parcelle,
+                    zone_type=zone_type,
+                    id_utilisateur=id_utilisateur
+                )
+                print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type})")
+            
+            return {
+                "zone_creee": True,
+                "id_zone": id_zone,
+                "zone_type": zone_type,
+                "id_parcelle": id_parcelle,
+                "parcelles_concernees": list(parcelles_concernees)
+            }
+        
+        return {"zone_creee": False, "raison": f"Seulement {len(toutes_obs)} observations (seuil {settings.SEUIL_CREATION_ZONE})"}
+
+    async def creer_notification_zone(
+        self,
+        id_utilisateur: int,
+        id_zone: int,
+        id_parcelle: int | None,
+        centre_lat: float,
+        centre_lon: float,
+        observations: int,
+        maladies: dict
+    ):
+        """Crée une notification pour une nouvelle zone"""
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            if observations >= 20:
+                titre = "🚨 Zone critique détectée !"
+                message = f"Une zone infectée critique a été détectée avec {observations} observations. Intervention immédiate recommandée."
+                type_notif = "zone_critique"
+            elif observations >= 10:
+                titre = "⚠️ Zone active détectée"
+                message = f"Une zone infectée active a été détectée avec {observations} observations. Traitement recommandé."
+                type_notif = "zone_creee"
+            else:
+                titre = "📍 Nouvelle zone émergente"
+                message = f"Une nouvelle zone infectée émergente a été détectée avec {observations} observations. Surveillance recommandée."
+                type_notif = "zone_creee"
+            
+            # Maladie dominante
+            maladie_dominante = max(maladies, key=maladies.get) if maladies else "Inconnue"
+            maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
+            message = f"{message} Maladie dominante: {maladie_dominante}."
+            
+            await conn.execute("""
+                INSERT INTO notification 
+                    (id_utilisateur, titre, message, type, id_zone, id_parcelle, latitude, longitude)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """, id_utilisateur, titre, message, type_notif, id_zone, id_parcelle, centre_lat, centre_lon)
+            print(f"🔔 Notification créée: {titre}")
+        finally:
+            await conn.close()
+
+    async def get_zones_utilisateur(self, id_utilisateur: int) -> list[dict]:
+        """Récupère toutes les zones d'un utilisateur"""
+        return await self.zone_repo.get_zones_by_user(id_utilisateur)
+
+    async def get_zone_detail(self, id_zone: int) -> dict | None:
+        """Récupère les détails d'une zone avec ses observations"""
+        zone = await self.zone_repo.get_zone_by_id(id_zone)
+        if not zone:
+            return None
+        
+        # Récupérer les observations de la zone
+        conn = await asyncpg.connect(settings.DATABASE_URL)
+        try:
+            observations = await conn.fetch("""
+                SELECT 
+                    o.id_observation,
+                    o.latitude,
+                    o.longitude,
+                    o.maladie_nom,
+                    o.confiance,
+                    o.timestamp
+                FROM observation o
+                WHERE ST_DWithin(
+                    ST_SetSRID(ST_MakePoint(o.longitude, o.latitude), 4326)::geography,
+                    ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                    $3
+                )
+                ORDER BY o.timestamp DESC
+            """, zone["centre_longitude"], zone["centre_latitude"], zone["rayon"])
+            
+            return {
+                **zone,
+                "observations": [dict(obs) for obs in observations]
+            }
+        finally:
+            await conn.close()

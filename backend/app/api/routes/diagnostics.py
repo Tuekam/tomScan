@@ -1,4 +1,3 @@
-# backend/app/api/routes/diagnostics.py
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 import asyncpg
@@ -92,17 +91,48 @@ async def get_diagnostics(
         await conn.close()
 
 
+# ============================================================
+# ✅ ROUTE DELETE CORRIGÉE AVEC VÉRIFICATION D'UTILISATEUR
+# ============================================================
 @router.delete("/diagnostics/{id_diagnostic}")
-async def delete_diagnostic(id_diagnostic: int):
-    """Supprime un diagnostic et ses observations associées"""
+async def delete_diagnostic(
+    id_diagnostic: int,
+    user_id: int = Query(..., description="ID de l'utilisateur propriétaire")
+):
+    """
+    Supprime un diagnostic après vérification que l'utilisateur en est le propriétaire
+    """
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
-        # Supprimer les observations liées
-        await conn.execute("DELETE FROM observation WHERE id_diagnostic = $1", id_diagnostic)
-        # Supprimer le diagnostic
-        result = await conn.execute("DELETE FROM diagnostic WHERE id_diagnostic = $1", id_diagnostic)
+        # ✅ 1. Vérifier que le diagnostic appartient à l'utilisateur
+        row = await conn.fetchrow(
+            "SELECT id_diagnostic FROM diagnostic WHERE id_diagnostic = $1 AND id_utilisateur = $2",
+            id_diagnostic, user_id
+        )
+        if not row:
+            raise HTTPException(
+                status_code=403, 
+                detail="Accès non autorisé à ce diagnostic"
+            )
+        
+        # ✅ 2. Supprimer les observations liées (ON DELETE CASCADE si configuré)
+        await conn.execute(
+            "DELETE FROM observation WHERE id_diagnostic = $1", 
+            id_diagnostic
+        )
+        
+        # ✅ 3. Supprimer le diagnostic
+        result = await conn.execute(
+            "DELETE FROM diagnostic WHERE id_diagnostic = $1", 
+            id_diagnostic
+        )
+        
         if int(result.split()[-1]) == 0:
             raise HTTPException(status_code=404, detail="Diagnostic non trouvé")
-        return {"status": "ok", "message": "Diagnostic supprimé"}
+        
+        return {
+            "status": "ok", 
+            "message": f"Diagnostic #{id_diagnostic} supprimé"
+        }
     finally:
         await conn.close()
