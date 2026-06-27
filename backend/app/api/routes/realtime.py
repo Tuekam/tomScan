@@ -1,3 +1,4 @@
+# backend/app/api/routes/realtime.py
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from datetime import datetime
 import uuid
@@ -208,8 +209,6 @@ async def process_frame(
         # ============================================================
         # 5. BOUNDING BOXES (optionnel - pour l'affichage uniquement)
         # ============================================================
-        # On peut toujours renvoyer des bounding boxes pour l'affichage
-        # même si ResNet analyse l'image entière
         detections = []
         try:
             nparr = np.frombuffer(image_bytes, np.uint8)
@@ -223,9 +222,8 @@ async def process_frame(
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
                             w = x2 - x1
                             h = y2 - y1
-                            # ✅ Plus de filtres restrictifs pour l'affichage
                             detections.append({
-                                "maladie": maladie,  # ← On met la maladie ResNet
+                                "maladie": maladie,
                                 "confiance": round(confiance, 2),
                                 "x": int(x1),
                                 "y": int(y1),
@@ -233,7 +231,7 @@ async def process_frame(
                                 "height": int(h),
                                 "bbox_color": get_bbox_color(maladie)
                             })
-                            break  # ← Une seule boîte suffit pour l'affichage
+                            break
         except Exception as e:
             print(f"   ⚠️ Erreur bounding boxes: {e}")
         
@@ -243,7 +241,7 @@ async def process_frame(
             "confiance": round(confiance, 2),
             "id_observation": id_observation,
             "id_diagnostic": id_diagnostic,
-            "detections": detections,  # ← Pour l'affichage uniquement
+            "detections": detections,
             "position": {"lat": latitude, "lon": longitude}
         }
             
@@ -268,38 +266,46 @@ async def end_realtime_session(
     session = sessions[session_id]
     resume = session.get_resume()
     
-    final_user_id = user_id if user_id else session.user_id
+    # ✅ Utiliser user_id passé en paramètre
+    final_user_id = user_id
     
     print(f"\n📊 RÉSUMÉ DE LA SESSION #{session_id[:8]}")
+    print(f"   👤 Utilisateur: {final_user_id}")
     print(f"   📸 Frames totales: {resume['total_frames']}")
     print(f"   ✅ Frames analysées: {resume['frames_analysees']}")
     print(f"   ⏭️ Ignorées (rate): {resume['frames_ignored_rate']}")
     print(f"   📷 Ignorées (qualité): {resume['frames_ignored_quality']}")
     
     zones_crees = []
+    
     for zone_data in resume["zones"]:
+        observations_zone = zone_data.get("observations_list", [])
+        
+        # ✅ Déterminer le type de zone
         zone_type = "HORS_PARCELLE"
         
+        # ✅ Créer la zone avec l'utilisateur correct
         id_zone = await zone_repo.creer_zone(
             centre_lat=zone_data["centre_lat"],
             centre_lon=zone_data["centre_lon"],
             nombre_obs=zone_data["observations"],
+            observations=observations_zone,
             id_parcelle=None,
             zone_type=zone_type,
-            id_utilisateur=final_user_id
+            id_utilisateur=final_user_id  # ← Utiliser final_user_id
         )
         
         nb_obs = zone_data["observations"]
         if nb_obs >= 20:
-            titre = f"🚨 Zone critique détectée !"
+            titre = "🚨 Zone critique détectée !"
             message = f"Une zone infectée critique a été détectée avec {nb_obs} observations. Intervention immédiate recommandée."
             type_notif = "zone_critique"
         elif nb_obs >= 10:
-            titre = f"⚠️ Zone active détectée"
+            titre = "⚠️ Zone active détectée"
             message = f"Une zone infectée active a été détectée avec {nb_obs} observations. Traitement recommandé."
             type_notif = "zone_creee"
         else:
-            titre = f"📍 Nouvelle zone émergente"
+            titre = "📍 Nouvelle zone émergente"
             message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
             type_notif = "zone_creee"
         
@@ -325,6 +331,7 @@ async def end_realtime_session(
             "maladies": zone_data["maladies"]
         })
     
+    # Sauvegarder la session en base
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         table_exists = await conn.fetchval("""
@@ -357,6 +364,7 @@ async def end_realtime_session(
     finally:
         await conn.close()
     
+    # Supprimer la session
     del sessions[session_id]
     
     return {

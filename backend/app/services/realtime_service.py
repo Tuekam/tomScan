@@ -1,3 +1,4 @@
+# backend/app/services/realtime_service.py
 import cv2
 import numpy as np
 from datetime import datetime
@@ -124,29 +125,45 @@ class RealtimeSession:
         """
         Regroupe les observations en zones avec un rayon adaptatif.
         ✅ Utilise settings.RAYON_GROUPEMENT_M et settings.SEUIL_CREATION_ZONE
+        ✅ Retourne les observations individuelles pour le rayon dynamique
+        ✅ CORRIGÉ : Vérifie la distance avec TOUTES les observations du groupe
         """
         if not self.observations:
             return []
         
         rayon_regroupement = settings.RAYON_GROUPEMENT_M
+        seuil_creation = settings.SEUIL_CREATION_ZONE
+        
+        print(f"   🔄 Regroupement: {len(self.observations)} observations, rayon={rayon_regroupement}m, seuil={seuil_creation}")
         
         groupes = []
         observations_restantes = self.observations.copy()
         
         while observations_restantes:
-            obs = observations_restantes.pop(0)
-            groupe = [obs]
+            premiere = observations_restantes.pop(0)
+            groupe = [premiere]
+            
             i = 0
             while i < len(observations_restantes):
-                if self.distance_en_metres(
-                    obs["latitude"], obs["longitude"],
-                    observations_restantes[i]["latitude"], observations_restantes[i]["longitude"]
-                ) <= rayon_regroupement:
+                obs = observations_restantes[i]
+                proche = False
+                # ✅ Vérifier la distance avec TOUTES les observations du groupe
+                for membre in groupe:
+                    if self.distance_en_metres(
+                        obs["latitude"], obs["longitude"],
+                        membre["latitude"], membre["longitude"]
+                    ) <= rayon_regroupement:
+                        proche = True
+                        break
+                if proche:
                     groupe.append(observations_restantes.pop(i))
+                    i = 0  # Redémarrer pour vérifier les nouvelles connexions
                 else:
                     i += 1
             
-            if len(groupe) >= settings.SEUIL_CREATION_ZONE:
+            print(f"   📊 Groupe trouvé: {len(groupe)} observations")
+            
+            if len(groupe) >= seuil_creation:
                 centre_lat = sum(o["latitude"] for o in groupe) / len(groupe)
                 centre_lon = sum(o["longitude"] for o in groupe) / len(groupe)
                 maladies = {}
@@ -158,7 +175,12 @@ class RealtimeSession:
                     "centre_lat": centre_lat,
                     "centre_lon": centre_lon,
                     "observations": len(groupe),
-                    "maladies": maladies
+                    "maladies": maladies,
+                    "observations_list": groupe
                 })
+                print(f"   ✅ Zone créée: {len(groupe)} observations")
+            else:
+                print(f"   ⏭️ Groupe ignoré: {len(groupe)} < {seuil_creation}")
         
+        print(f"   🏁 Total zones: {len(groupes)}")
         return groupes

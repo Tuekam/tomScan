@@ -16,7 +16,7 @@ class Settings:
     SEUIL_CONFIANCE_RESNET: float = float(os.getenv("SEUIL_CONFIANCE_RESNET", "0.5")) # ← Classification
     
     # Règles métier
-    RAYON_GROUPEMENT_M: float = float(os.getenv("RAYON_GROUPEMENT_M", "3.0"))
+    RAYON_GROUPEMENT_M: float = float(os.getenv("RAYON_GROUPEMENT_M", "10.0"))
     SEUIL_CREATION_ZONE: int = int(os.getenv("SEUIL_CREATION_ZONE", "6"))
     RAYON_RECHERCHE_ZONE: float = float(os.getenv("RAYON_RECHERCHE_ZONE", "3.0"))
     

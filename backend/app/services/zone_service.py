@@ -12,7 +12,7 @@ class ZoneService:
 
     def distance_en_mètres(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Formule de Haversine pour calculer la distance entre deux points GPS"""
-        R = 6371000  # Rayon terrestre en mètres
+        R = 6371000
         phi1 = math.radians(lat1)
         phi2 = math.radians(lat2)
         dphi = math.radians(lat2 - lat1)
@@ -33,7 +33,7 @@ class ZoneService:
                     ST_SetSRID(ST_MakePoint($1, $2), 4326)
                 )
                 LIMIT 1
-            """, lon, lat)  # longitude, latitude
+            """, lon, lat)
             return row['id_parcelle'] if row else None
         finally:
             await conn.close()
@@ -114,16 +114,33 @@ class ZoneService:
                 id_zone = id_existant
                 print(f"🔄 Zone #{id_existant} mise à jour (total: {nouveau_total} observations)")
             else:
-                # Créer une nouvelle zone
+                # ✅ Créer une nouvelle zone AVEC les observations (pour le rayon dynamique)
                 id_zone = await self.zone_repo.creer_zone(
                     centre_lat=centre_lat,
                     centre_lon=centre_lon,
                     nombre_obs=len(toutes_obs),
+                    observations=toutes_obs,  # ← Passer les observations
                     id_parcelle=id_parcelle,
                     zone_type=zone_type,
                     id_utilisateur=id_utilisateur
                 )
                 print(f"🆕 Nouvelle zone #{id_zone} créée ({zone_type})")
+            
+            # Créer une notification
+            maladies = {}
+            for obs in toutes_obs:
+                m = obs.get("maladie", "Inconnue")
+                maladies[m] = maladies.get(m, 0) + 1
+            
+            await self.creer_notification_zone(
+                id_utilisateur=id_utilisateur,
+                id_zone=id_zone,
+                id_parcelle=id_parcelle,
+                centre_lat=centre_lat,
+                centre_lon=centre_lon,
+                observations=len(toutes_obs),
+                maladies=maladies
+            )
             
             return {
                 "zone_creee": True,
@@ -185,7 +202,6 @@ class ZoneService:
         if not zone:
             return None
         
-        # Récupérer les observations de la zone
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
             observations = await conn.fetch("""

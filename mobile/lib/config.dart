@@ -1,7 +1,7 @@
 class AppConfig {
   // URL du backend
-  static const String baseUrl = 'http://192.168.0.176:8000/api';
-  static const String baseUrlImages = 'http://192.168.0.176:8000/api/images';
+  static const String baseUrl = 'http://192.168.158.27:8000/api';
+  static const String baseUrlImages = 'http://192.168.158.27:8000/api/images';
 
   // Seuils (synchro avec backend)
   static const double rayonGroupementM = 3.0;
