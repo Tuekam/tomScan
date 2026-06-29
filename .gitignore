@@ -73,5 +73,6 @@ Thumbs.db
 *.log
 *.tmp
 backend/ml/best_resnet18_augmented_old.pth
+backend/ml/best_resnet18_augmented.pth
 mobile/linux/
 mobile/windows/
