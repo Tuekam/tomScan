@@ -94,9 +94,9 @@ class ZoneService:
             # Récupérer l'ID de parcelle (si une seule)
             id_parcelle = list(parcelles_concernees)[0] if len(parcelles_concernees) == 1 else None
             
-            # Vérifier si une zone existe déjà
+            # ✅ Vérifier si une zone existe déjà (avec filtre utilisateur)
             id_existant = await self.zone_repo.zone_existe_proche(
-                centre_lat, centre_lon, settings.RAYON_RECHERCHE_ZONE
+                centre_lat, centre_lon, settings.RAYON_RECHERCHE_ZONE, id_utilisateur
             )
             
             if id_existant:
@@ -119,7 +119,7 @@ class ZoneService:
                     centre_lat=centre_lat,
                     centre_lon=centre_lon,
                     nombre_obs=len(toutes_obs),
-                    observations=toutes_obs,  # ← Passer les observations
+                    observations=toutes_obs,
                     id_parcelle=id_parcelle,
                     zone_type=zone_type,
                     id_utilisateur=id_utilisateur

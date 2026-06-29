@@ -42,6 +42,7 @@ class _StatsScreenState extends State<StatsScreen> {
     '365j': '1 an',
   };
 
+  // ✅ AJOUT de l'Oïdium
   static const Map<String, Color> _maladieColors = {
     'Mildiou': Color(0xFFEF4444),
     'Alternariose': Color(0xFFF59E0B),
@@ -49,6 +50,7 @@ class _StatsScreenState extends State<StatsScreen> {
     'Septoriose': Color(0xFF6366F1),
     'Moisissure': Color(0xFFEC4899),
     'Sain': Color(0xFF22C55E),
+    'Oïdium': Color(0xFF2196F3), // ← NOUVEAU !
   };
 
   @override
@@ -212,14 +214,12 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   // ============================================================
-  // ✅ ZONE DETAIL - CORRIGÉ AVEC user_id
+  // ZONE DETAIL
   // ============================================================
   Future<void> _showZoneDetail(Map<String, dynamic> zone) async {
     try {
-      // ✅ Récupérer l'ID de l'utilisateur
       final userId = await _getUserId() ?? 1;
 
-      // ✅ Envoyer user_id en query param
       final response = await _dio.get(
         '${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}',
         queryParameters: {'user_id': userId},
@@ -536,7 +536,10 @@ class _StatsScreenState extends State<StatsScreen> {
     );
   }
 
+  // ✅ Gestion des 7 classes
   String _getMaladieDisplayName(String nom) {
+    if (nom == null || nom.isEmpty) return 'Inconnue';
+
     String clean = nom.replaceAll('_', ' ').trim();
 
     if (clean.contains('Early') && clean.contains('Blight'))
@@ -548,13 +551,18 @@ class _StatsScreenState extends State<StatsScreen> {
     if (clean.contains('mold')) return 'Moisissure';
     if (clean.contains('septoria') || clean.contains('spot'))
       return 'Septoriose';
+    // ✅ NOUVEAU
+    if (clean.contains('powdery') || clean.contains('mildew')) return 'Oïdium';
 
     if (_maladieColors.containsKey(clean)) return clean;
 
     return clean;
   }
 
+  // ✅ Gestion des 7 classes avec couleurs
   Color _getMaladieColor(String nom) {
+    if (nom == null || nom.isEmpty) return Colors.grey;
+
     if (_maladieColors.containsKey(nom)) {
       return _maladieColors[nom]!;
     }

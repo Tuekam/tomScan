@@ -72,6 +72,6 @@ android/local.properties
 Thumbs.db
 *.log
 *.tmp
-backend/ml/best_resnet18_augmented.pth
+backend/ml/best_resnet18_augmented_old.pth
 mobile/linux/
 mobile/windows/

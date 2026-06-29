@@ -1,4 +1,3 @@
-// screens/result_screen.dart
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme.dart';
@@ -49,7 +48,27 @@ class ResultScreen extends StatelessWidget {
   }
 
   String _getFormattedMaladieName(String name) {
-    return name.replaceAll('_', ' ').replaceAll('Tomato ', '');
+    String clean = name.replaceAll('_', ' ').trim();
+    if (clean.toLowerCase().startsWith('tomato ')) {
+      clean = clean.substring(7);
+    }
+
+    final Map<String, String> frenchNames = {
+      'Early Blight': 'Alternariose',
+      'Healthy': 'Sain',
+      'leaf late blight': 'Mildiou',
+      'leaf yellow curl virus': 'Virus jaune',
+      'mold leaf': 'Moisissure',
+      'powdery mildew': 'Oïdium',
+      'septoria leaf spot': 'Septoriose',
+    };
+
+    for (var entry in frenchNames.entries) {
+      if (clean.toLowerCase().contains(entry.key.toLowerCase())) {
+        return entry.value;
+      }
+    }
+    return clean;
   }
 
   String _getReferenceFolder() {
@@ -60,6 +79,8 @@ class ResultScreen extends StatelessWidget {
     if (lower.contains('yellow')) return 'yellow_curl';
     if (lower.contains('mold')) return 'mold';
     if (lower.contains('septoria')) return 'septoria_spot';
+    if (lower.contains('powdery') || lower.contains('mildew'))
+      return 'powdery_mildew';
     return '';
   }
 
@@ -248,7 +269,7 @@ class ResultScreen extends StatelessWidget {
             ),
             const SizedBox(height: 20),
 
-            // ---------- Images de référence (carrousel) ----------
+            // ---------- Images de référence ----------
             if (!isHealthy &&
                 !maladie.contains('Non identifiable') &&
                 referenceImages.isNotEmpty)
@@ -266,10 +287,8 @@ class ResultScreen extends StatelessWidget {
                       children: [
                         Icon(Icons.image, size: 20, color: AppTheme.primary),
                         const SizedBox(width: 8),
-                        const Text(
-                          'Images de référence',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
+                        const Text('Images de référence',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -399,12 +418,9 @@ class ResultScreen extends StatelessWidget {
               ),
             const SizedBox(height: 24),
 
-            // ---------- Boutons d'action ----------
+            // ---------- Boutons ----------
             ElevatedButton.icon(
-              onPressed: () {
-                // Récupérer l'ID de l'utilisateur connecté pour la carte
-                _navigateToMap(context);
-              },
+              onPressed: () => _navigateToMap(context),
               icon: const Icon(Icons.map),
               label: const Text('Voir sur la carte'),
               style: ElevatedButton.styleFrom(
@@ -448,9 +464,7 @@ class ResultScreen extends StatelessWidget {
   }
 
   void _navigateToMap(BuildContext context) async {
-    // Récupérer l'ID de l'utilisateur connecté
     final userId = await AuthService().getUserId();
-
     Navigator.pop(context, {
       'action': 'view_on_map',
       'latitude': latitude,

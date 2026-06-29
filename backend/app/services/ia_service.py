@@ -1,4 +1,3 @@
-# backend/app/services/ia_service.py
 import torch
 import torch.nn as nn
 from torchvision import models
@@ -17,13 +16,32 @@ class IAService:
         self.model = self._load_model(model_path)
 
     def _load_model(self, model_path: str):
-        model = models.resnet18(pretrained=False)
-        num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, len(self.class_names))
-        model.load_state_dict(torch.load(model_path, map_location=self.device))
-        model = model.to(self.device)
-        model.eval()
-        return model
+        """
+        Charge le modèle en supportant à la fois TorchScript et state_dict
+        """
+        try:
+            # ✅ 1. Essayer de charger en TorchScript (nouveau modèle)
+            model = torch.jit.load(model_path, map_location=self.device)
+            print(f"✅ Modèle chargé en mode TorchScript avec {len(self.class_names)} classes")
+            model = model.to(self.device)
+            model.eval()
+            return model
+        except Exception as e:
+            print(f"⚠️ Échec chargement TorchScript: {e}")
+            
+            # ✅ 2. Fallback: charger en state_dict (ancien modèle)
+            try:
+                model = models.resnet18(pretrained=False)
+                num_ftrs = model.fc.in_features
+                model.fc = nn.Linear(num_ftrs, len(self.class_names))
+                model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=False))
+                model = model.to(self.device)
+                model.eval()
+                print(f"✅ Modèle chargé en mode state_dict avec {len(self.class_names)} classes")
+                return model
+            except Exception as e2:
+                print(f"❌ Erreur chargement modèle: {e2}")
+                raise RuntimeError(f"Impossible de charger le modèle: {e2}")
 
     async def classifier(self, image_bytes: bytes):
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
@@ -31,7 +49,11 @@ class IAService:
 
         with torch.no_grad():
             outputs = self.model(tensor)
-            probs = torch.nn.functional.softmax(outputs[0], dim=0)
+            # ✅ Support TorchScript et state_dict
+            if hasattr(outputs, 'shape') and len(outputs.shape) == 2:
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+            else:
+                probs = torch.nn.functional.softmax(outputs, dim=0)
             conf, pred = torch.max(probs, 0)
 
         maladie = self.class_names[pred.item()]

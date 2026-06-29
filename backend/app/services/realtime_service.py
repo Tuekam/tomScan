@@ -74,9 +74,13 @@ class RealtimeSession:
         
         return True, "ok"
     
+    # ============================================================
+    # ✅ CORRIGÉ : ajouter_analyse avec id_parcelle
+    # ============================================================
     def ajouter_analyse(self, lat: float, lon: float, maladie: str, confiance: float, 
-                        id_observation: int = None, id_diagnostic: int = None):
-        """Ajoute une observation à la session"""
+                        id_observation: int = None, id_diagnostic: int = None,
+                        id_parcelle: int = None):
+        """Ajoute une observation à la session avec sa parcelle"""
         now = datetime.now()
         self.last_frame_time = now.timestamp()
         self.frames_analysees += 1
@@ -88,6 +92,7 @@ class RealtimeSession:
             "confiance": confiance,
             "id_observation": id_observation,
             "id_diagnostic": id_diagnostic,
+            "id_parcelle": id_parcelle,  # ← AJOUTÉ
             "timestamp": now.isoformat()
         })
     
@@ -171,11 +176,19 @@ class RealtimeSession:
                     m = o.get("maladie", "Inconnue")
                     maladies[m] = maladies.get(m, 0) + 1
                 
+                # ✅ Ajouter les parcelles
+                parcelles = {}
+                for o in groupe:
+                    p = o.get("id_parcelle")
+                    if p:
+                        parcelles[p] = parcelles.get(p, 0) + 1
+                
                 groupes.append({
                     "centre_lat": centre_lat,
                     "centre_lon": centre_lon,
                     "observations": len(groupe),
                     "maladies": maladies,
+                    "parcelles": parcelles,  # ← AJOUTÉ
                     "observations_list": groupe
                 })
                 print(f"   ✅ Zone créée: {len(groupe)} observations")

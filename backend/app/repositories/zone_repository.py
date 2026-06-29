@@ -15,13 +15,18 @@ class ZoneRepository:
         a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     
-    async def zone_existe_proche(self, lat: float, lon: float, rayon_m: float = None) -> int | None:
+    # ============================================================
+    # ✅ CORRIGÉ : zone_existe_proche AVEC FILTRE UTILISATEUR
+    # ============================================================
+    async def zone_existe_proche(self, lat: float, lon: float, 
+                                 rayon_m: float = None,
+                                 user_id: int = None) -> int | None:
         """Vérifie si une zone existe à proximité (rayon en mètres)"""
         if rayon_m is None:
             rayon_m = settings.RAYON_GROUPEMENT_M
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            row = await conn.fetchrow("""
+            query = """
                 SELECT id_zone 
                 FROM zone_infectee
                 WHERE ST_DWithin(
@@ -29,26 +34,37 @@ class ZoneRepository:
                     ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
                     $3
                 )
-                LIMIT 1
-            """, lon, lat, rayon_m)
+            """
+            params = [lon, lat, rayon_m]
+            
+            if user_id is not None:
+                query += " AND id_utilisateur = $4"
+                params.append(user_id)
+            
+            query += " LIMIT 1"
+            
+            row = await conn.fetchrow(query, *params)
             return row['id_zone'] if row else None
         finally:
             await conn.close()
     
     # ============================================================
-    # ✅ CORRIGÉ : trouver_zone_proche_observation
+    # ✅ CORRIGÉ : trouver_zone_proche_observation AVEC FILTRE UTILISATEUR
     # ============================================================
-    async def trouver_zone_proche_observation(self, lat: float, lon: float, rayon_m: float = None) -> int | None:
+    async def trouver_zone_proche_observation(self, lat: float, lon: float, 
+                                              rayon_m: float = None,
+                                              user_id: int = None) -> int | None:
         """
         Trouve une zone existante qui peut accueillir une nouvelle observation.
         Utilise le rayon de regroupement (et non le rayon de la zone).
+        ✅ FILTRE PAR UTILISATEUR
         """
         if rayon_m is None:
             rayon_m = settings.RAYON_GROUPEMENT_M
         
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            row = await conn.fetchrow("""
+            query = """
                 SELECT z.id_zone
                 FROM zone_infectee z
                 WHERE ST_DWithin(
@@ -56,8 +72,16 @@ class ZoneRepository:
                     ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
                     $3
                 )
-                LIMIT 1
-            """, lon, lat, rayon_m)
+            """
+            params = [lon, lat, rayon_m]
+            
+            if user_id is not None:
+                query += " AND z.id_utilisateur = $4"
+                params.append(user_id)
+            
+            query += " LIMIT 1"
+            
+            row = await conn.fetchrow(query, *params)
             return row['id_zone'] if row else None
         finally:
             await conn.close()

@@ -1,4 +1,3 @@
-// screens/realtime_result_screen.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'map_screen.dart';
@@ -14,6 +13,43 @@ class RealtimeResultScreen extends StatelessWidget {
     required this.zones,
     this.sessionId,
   });
+
+  // ✅ Noms affichés pour les maladies
+  String _getDisplayName(String nom) {
+    final Map<String, String> displayNames = {
+      'Tomato_Early_Blight': 'Alternariose',
+      'Tomato_healthy': 'Sain',
+      'Tomato_Late_blight': 'Mildiou',
+      'Tomato_leaf_yellow_curl_virus': 'Virus jaune',
+      'Tomato_mold': 'Moisissure',
+      'Tomato_powdery_mildew': 'Oïdium', // ← NOUVEAU !
+      'Tomato_Septoria_leaf_spot': 'Septoriose',
+    };
+    return displayNames[nom] ??
+        nom.replaceAll('_', ' ').replaceAll('Tomato ', '');
+  }
+
+  // ✅ Couleurs pour les 7 classes
+  Color _getMaladieColor(String nom) {
+    switch (nom) {
+      case 'Tomato_Early_Blight':
+        return Colors.orange;
+      case 'Tomato_healthy':
+        return Colors.green;
+      case 'Tomato_Late_blight':
+        return Colors.red;
+      case 'Tomato_leaf_yellow_curl_virus':
+        return Colors.purple;
+      case 'Tomato_mold':
+        return Colors.pink;
+      case 'Tomato_powdery_mildew': // ← NOUVEAU !
+        return Colors.blue.shade700;
+      case 'Tomato_Septoria_leaf_spot':
+        return Colors.indigo;
+      default:
+        return Colors.grey;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -130,6 +166,7 @@ class RealtimeResultScreen extends StatelessWidget {
                     ...sortedMaladies.map((entry) {
                       final percentage =
                           totalObs > 0 ? (entry.value / totalObs * 100) : 0;
+                      final displayName = _getDisplayName(entry.key);
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Column(
@@ -139,7 +176,7 @@ class RealtimeResultScreen extends StatelessWidget {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    entry.key,
+                                    displayName,
                                     style: const TextStyle(
                                         fontWeight: FontWeight.w500,
                                         fontSize: 13),
@@ -260,7 +297,7 @@ class RealtimeResultScreen extends StatelessWidget {
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 2),
                                   child: Text(
-                                    '🦠 ${m.key}: ${m.value}',
+                                    '🦠 ${_getDisplayName(m.key)}: ${m.value}',
                                     style: const TextStyle(fontSize: 12),
                                   ),
                                 )),
@@ -345,24 +382,5 @@ class RealtimeResultScreen extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  Color _getMaladieColor(String nom) {
-    switch (nom) {
-      case 'Tomato_Early_Blight':
-        return Colors.orange;
-      case 'Tomato_healthy':
-        return Colors.green;
-      case 'Tomato_Late_blight':
-        return Colors.red;
-      case 'Tomato_leaf_yellow_curl_virus':
-        return Colors.purple;
-      case 'Tomato_mold':
-        return Colors.pink;
-      case 'Tomato_Septoria_leaf_spot':
-        return Colors.indigo;
-      default:
-        return Colors.grey;
-    }
   }
 }

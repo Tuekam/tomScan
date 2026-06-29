@@ -52,13 +52,14 @@ def get_bbox_color(maladie: str) -> str:
         "Tomato_leaf_yellow_curl_virus": "#8B5CF6",
         "Tomato_mold": "#EC4899",
         "Tomato_Septoria_leaf_spot": "#6366F1",
+        "Tomato_powdery_mildew": "#2196F3",
         "Non identifiable": "#6B7280"
     }
     return colors.get(maladie, "#6B7280")
 
 async def contient_plante(image_bytes: bytes) -> bool:
     """
-    ✅ VERSION CORRIGÉE : Filtre binaire comme dans predict.py
+    ✅ Filtre binaire comme dans predict.py
     Retourne True si YOLO détecte au moins une plante/feuille de tomate
     """
     try:
@@ -117,13 +118,11 @@ async def process_frame(
     image: UploadFile = File(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
-    precision_gps: float = Form(5.0)
+    precision_gps: float = Form(5.0),
+    id_parcelle: int = Form(None)
 ):
     """
-    ✅ VERSION CORRIGÉE : Alignée sur la logique du mode photo
-    1. YOLO = Filtre de présence (comme predict.py)
-    2. ResNet = Classification de l'image entière (comme predict.py)
-    3. Pas de découpe YOLO, pas de rejet "trop grand"
+    ✅ Version alignée sur la logique du mode photo
     """
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session invalide ou expirée")
@@ -150,7 +149,7 @@ async def process_frame(
         }
     
     # ============================================================
-    # 2. YOLO = FILTRE DE PRÉSENCE (comme predict.py)
+    # 2. YOLO = FILTRE DE PRÉSENCE
     # ============================================================
     if not await contient_plante(image_bytes):
         print(f"   ❌ Aucune plante de tomate détectée (YOLO)")
@@ -161,7 +160,7 @@ async def process_frame(
         }
     
     # ============================================================
-    # 3. RESNET = CLASSIFICATION DE L'IMAGE ENTIÈRE (comme predict.py)
+    # 3. RESNET = CLASSIFICATION DE L'IMAGE ENTIÈRE
     # ============================================================
     try:
         maladie, confiance = await ia_service.classifier(image_bytes)
@@ -182,7 +181,7 @@ async def process_frame(
         print(f"   ✅ ANALYSÉE: {maladie} ({confiance:.1f}%)")
         
         # Sauvegarder le diagnostic
-        id_diagnostic = await diag_repo.save_diagnostic(session.user_id, "TEMPS_REEL", None)
+        id_diagnostic = await diag_repo.save_diagnostic(session.user_id, "TEMPS_REEL", id_parcelle)
         id_maladie = await maladie_repo.get_id_by_nom(maladie)
         now = datetime.now()
         
@@ -197,17 +196,21 @@ async def process_frame(
             image_path="",
             confiance=confiance,
             maladie_nom=maladie,
-            id_parcelle=None
+            id_parcelle=id_parcelle
         )
         
-        # Ajouter à la session pour regroupement
-        session.ajouter_analyse(
-            latitude, longitude, maladie, confiance,
-            id_observation, id_diagnostic
-        )
+        # ✅ Ajouter à la session AVEC id_parcelle
+        if maladie not in ["Non identifiable", "Tomato_healthy"]:
+            session.ajouter_analyse(
+                latitude, longitude, maladie, confiance,
+                id_observation, id_diagnostic,
+                id_parcelle  # ← AJOUTER id_parcelle
+            )
+        else:
+            print(f"   ⏭️ Observation #{id_observation} ignorée pour regroupement ({maladie})")
         
         # ============================================================
-        # 5. BOUNDING BOXES (optionnel - pour l'affichage uniquement)
+        # 5. BOUNDING BOXES (pour l'affichage)
         # ============================================================
         detections = []
         try:
@@ -266,7 +269,6 @@ async def end_realtime_session(
     session = sessions[session_id]
     resume = session.get_resume()
     
-    # ✅ Utiliser user_id passé en paramètre
     final_user_id = user_id
     
     print(f"\n📊 RÉSUMÉ DE LA SESSION #{session_id[:8]}")
@@ -281,19 +283,65 @@ async def end_realtime_session(
     for zone_data in resume["zones"]:
         observations_zone = zone_data.get("observations_list", [])
         
-        # ✅ Déterminer le type de zone
-        zone_type = "HORS_PARCELLE"
+        # ✅ Déterminer les maladies de la zone
+        maladies_zone = {}
+        for obs in observations_zone:
+            m = obs.get("maladie", "Inconnue")
+            if m not in ["Non identifiable", "Tomato_healthy"]:
+                maladies_zone[m] = maladies_zone.get(m, 0) + 1
         
-        # ✅ Créer la zone avec l'utilisateur correct
-        id_zone = await zone_repo.creer_zone(
-            centre_lat=zone_data["centre_lat"],
-            centre_lon=zone_data["centre_lon"],
-            nombre_obs=zone_data["observations"],
-            observations=observations_zone,
-            id_parcelle=None,
-            zone_type=zone_type,
-            id_utilisateur=final_user_id  # ← Utiliser final_user_id
+        if not maladies_zone:
+            print(f"   ⏭️ Zone ignorée (pas de maladies infectieuses)")
+            continue
+        
+        # ✅ Déterminer la parcelle majoritaire
+        parcelle_id = None
+        parcelles_compteur = {}
+        for obs in observations_zone:
+            p = obs.get("id_parcelle")
+            if p:
+                parcelles_compteur[p] = parcelles_compteur.get(p, 0) + 1
+        
+        if parcelles_compteur:
+            parcelle_id = max(parcelles_compteur, key=parcelles_compteur.get)
+            print(f"   📍 Parcelle associée: {parcelle_id} ({parcelles_compteur[parcelle_id]} observations)")
+        
+        zone_type = "DANS_PARCELLE" if parcelle_id else "HORS_PARCELLE"
+        
+        # ✅ Vérifier si une zone existe déjà pour cet utilisateur
+        zone_existante = await zone_repo.zone_existe_proche(
+            zone_data["centre_lat"], 
+            zone_data["centre_lon"], 
+            settings.RAYON_GROUPEMENT_M,
+            final_user_id
         )
+        
+        if zone_existante:
+            # ✅ Ajouter les observations à la zone existante
+            for obs in observations_zone:
+                await zone_repo.ajouter_observation_a_zone(
+                    zone_existante, 
+                    obs.get("id_observation"), 
+                    obs["latitude"], 
+                    obs["longitude"], 
+                    obs.get("maladie", "Inconnue")
+                )
+            # ✅ Recalculer la zone
+            await zone_repo.recalculer_zone(zone_existante)
+            id_zone = zone_existante
+            print(f"🔄 Zone #{zone_existante} mise à jour avec {len(observations_zone)} nouvelles observations")
+        else:
+            # ✅ Créer une nouvelle zone
+            id_zone = await zone_repo.creer_zone(
+                centre_lat=zone_data["centre_lat"],
+                centre_lon=zone_data["centre_lon"],
+                nombre_obs=zone_data["observations"],
+                observations=observations_zone,
+                id_parcelle=parcelle_id,
+                zone_type=zone_type,
+                id_utilisateur=final_user_id
+            )
+            print(f"🆕 Nouvelle zone #{id_zone} créée")
         
         nb_obs = zone_data["observations"]
         if nb_obs >= 20:
@@ -309,9 +357,8 @@ async def end_realtime_session(
             message = f"Une nouvelle zone infectée émergente a été détectée avec {nb_obs} observations. Surveillance recommandée."
             type_notif = "zone_creee"
         
-        maladies_list = zone_data.get("maladies", {})
-        if maladies_list:
-            maladie_dominante = max(maladies_list, key=maladies_list.get) if maladies_list else "Inconnue"
+        if maladies_zone:
+            maladie_dominante = max(maladies_zone, key=maladies_zone.get)
             maladie_dominante = maladie_dominante.replace('Tomato_', '').replace('_', ' ')
             message = f"{message} Maladie dominante: {maladie_dominante}."
         
@@ -321,6 +368,7 @@ async def end_realtime_session(
             message=message,
             type=type_notif,
             id_zone=id_zone,
+            id_parcelle=parcelle_id,
             latitude=zone_data["centre_lat"],
             longitude=zone_data["centre_lon"]
         )
@@ -328,7 +376,8 @@ async def end_realtime_session(
         zones_crees.append({
             "id_zone": id_zone,
             "observations": zone_data["observations"],
-            "maladies": zone_data["maladies"]
+            "maladies": maladies_zone,
+            "id_parcelle": parcelle_id
         })
     
     # Sauvegarder la session en base
@@ -364,7 +413,6 @@ async def end_realtime_session(
     finally:
         await conn.close()
     
-    # Supprimer la session
     del sessions[session_id]
     
     return {
