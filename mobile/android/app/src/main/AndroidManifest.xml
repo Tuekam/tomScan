@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     
     <application
-        android:label="mobile"
+        android:label="TomScan"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
 

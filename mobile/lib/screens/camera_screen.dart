@@ -49,6 +49,9 @@ class _CameraScreenState extends State<CameraScreen> {
 
   int _currentUserId = 0;
 
+  // ✅ Nombre de notifications non lues
+  int _unreadCount = 0;
+
   @override
   void initState() {
     super.initState();
@@ -57,11 +60,43 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Future<void> _loadCurrentUserId() async {
     _currentUserId = await AuthService().getUserId() ?? 0;
-    // Initialiser le cache local avec l'ID utilisateur
     if (_currentUserId != 0) {
       _localDb.setUserId(_currentUserId);
     }
     _loadLastDiagnosis();
+    _loadUnreadCount();
+  }
+
+  // ============================================================
+  // ✅ CHARGER LE NOMBRE DE NOTIFICATIONS NON LUES
+  // ============================================================
+  Future<void> _loadUnreadCount() async {
+    try {
+      final userId = await AuthService().getUserId() ?? 1;
+      final response = await _dio.get(
+        '${AppConfig.baseUrl}/notifications/unread/count',
+        queryParameters: {'user_id': userId},
+      );
+      if (response.statusCode == 200) {
+        setState(() {
+          _unreadCount = response.data['count'] ?? 0;
+        });
+      }
+    } catch (e) {
+      print('Erreur chargement notifications: $e');
+    }
+  }
+
+  // ✅ OUVRIR LES NOTIFICATIONS ET METTRE À JOUR LE BADGE
+  Future<void> _openNotifications() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const NotificationsScreen(),
+      ),
+    );
+    // Recharger le compteur après fermeture
+    await _loadUnreadCount();
   }
 
   Future<void> _loadLastDiagnosis() async {
@@ -442,19 +477,43 @@ class _CameraScreenState extends State<CameraScreen> {
         ),
         backgroundColor: Colors.white,
         elevation: 0,
-        automaticallyImplyLeading: false, // ← SUPPRIME LA FLÈCHE RETOUR
+        automaticallyImplyLeading: false,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const NotificationsScreen(),
+          // ✅ BOUTON NOTIFICATIONS AVEC BADGE
+          Stack(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.notifications_none),
+                onPressed: _openNotifications,
+                color: AppTheme.primary,
+              ),
+              if (_unreadCount > 0)
+                Positioned(
+                  right: 4,
+                  top: 4,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.danger,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    child: Text(
+                      _unreadCount > 9 ? '9+' : '$_unreadCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                 ),
-              );
-            },
-            color: AppTheme.primary,
+            ],
           ),
           IconButton(
             icon: const Icon(Icons.person_outline),

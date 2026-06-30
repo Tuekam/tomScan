@@ -1,6 +1,7 @@
 # backend/app/repositories/parcelle_repository.py
 import asyncpg
 import json
+from datetime import datetime, timedelta
 from app.core.config import settings
 
 class ParcelleRepository:
@@ -194,38 +195,66 @@ class ParcelleRepository:
         finally:
             await conn.close()
     
-    async def calculer_taux_infection(self, id_parcelle: int):
+    async def calculer_taux_infection(
+        self,
+        id_parcelle: int,
+        user_id: int = 1,
+        periode: str = "30j",
+        maladie: str | None = None,
+    ):
         """Calcule le taux d'infection pour une parcelle spécifique"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            total_obs = await conn.fetchval("""
+            jours = {"7j": 7, "30j": 30, "90j": 90, "365j": 365}.get(periode, 30)
+            date_debut = datetime.now() - timedelta(days=jours)
+
+            obs_filters = [
+                "o.id_parcelle = $1",
+                "d.id_utilisateur = $2",
+                "o.timestamp >= $3",
+            ]
+            params = [id_parcelle, user_id, date_debut]
+            param_index = 4
+
+            if maladie:
+                obs_filters.append(f"o.maladie_nom = ${param_index}")
+                params.append(maladie)
+                param_index += 1
+
+            where_clause = " AND ".join(obs_filters)
+
+            total_obs = await conn.fetchval(f"""
                 SELECT COUNT(*)
-                FROM observation
-                WHERE id_parcelle = $1
-            """, id_parcelle)
+                FROM observation o
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
+                WHERE {where_clause}
+            """, *params)
             
-            malades_obs = await conn.fetchval("""
+            malades_obs = await conn.fetchval(f"""
                 SELECT COUNT(*)
-                FROM observation
-                WHERE id_parcelle = $1 
-                AND maladie_nom != 'Tomato_healthy'
-                AND maladie_nom != 'Non identifiable'
-                AND maladie_nom IS NOT NULL
-            """, id_parcelle)
+                FROM observation o
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
+                WHERE {where_clause}
+                AND o.maladie_nom IS NOT NULL
+                AND o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable', 'Sain')
+            """, *params)
             
             total = total_obs if total_obs else 0
             malades = malades_obs if malades_obs else 0
             taux_infection = (malades / total * 100) if total > 0 else 0
             
-            maladies_stats = await conn.fetch("""
+            maladies_stats = await conn.fetch(f"""
                 SELECT 
-                    maladie_nom,
+                    o.maladie_nom as maladie_nom,
                     COUNT(*) as count
-                FROM observation
-                WHERE id_parcelle = $1
-                GROUP BY maladie_nom
+                FROM observation o
+                JOIN diagnostic d ON o.id_diagnostic = d.id_diagnostic
+                WHERE {where_clause}
+                AND o.maladie_nom IS NOT NULL
+                AND o.maladie_nom NOT IN ('Tomato_healthy', 'Non identifiable', 'Sain')
+                GROUP BY o.maladie_nom
                 ORDER BY count DESC
-            """, id_parcelle)
+            """, *params)
             
             return {
                 'id_parcelle': id_parcelle,

@@ -19,6 +19,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _isLoading = true;
   String? _error;
 
+  // ✅ Callback pour mettre à jour le badge
+  VoidCallback? _onNotificationsUpdated;
+
   @override
   void initState() {
     super.initState();
@@ -31,7 +34,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       _error = null;
     });
     try {
-      // ✅ Récupérer l'ID de l'utilisateur connecté
       final userId = await AuthService().getUserId();
 
       final response = await _dio.get(
@@ -69,7 +71,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Future<void> _markAllAsRead() async {
     try {
-      // ✅ Récupérer l'ID de l'utilisateur connecté
       final userId = await AuthService().getUserId();
 
       await _dio.post(

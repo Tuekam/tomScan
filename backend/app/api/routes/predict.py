@@ -1,4 +1,3 @@
-# backend/app/api/routes/predict.py
 from fastapi import APIRouter, UploadFile, File, Form
 from datetime import datetime
 from math import radians, sin, cos, sqrt, atan2
@@ -94,8 +93,14 @@ async def contient_plante(image_bytes: bytes) -> bool:
         print(f"Erreur YOLO : {e}")
         return False
 
-async def trouver_parcelle_du_point(lat: float, lon: float) -> int | None:
-    """Trouve la parcelle contenant ce point (géométrique)"""
+# ============================================================
+# ✅ CORRIGÉ : trouver_parcelle_du_point AVEC FILTRE UTILISATEUR
+# ============================================================
+async def trouver_parcelle_du_point(lat: float, lon: float, user_id: int) -> int | None:
+    """
+    Trouve la parcelle contenant ce point et appartenant à l'utilisateur
+    ✅ FILTRE PAR id_utilisateur
+    """
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         row = await conn.fetchrow("""
@@ -105,8 +110,9 @@ async def trouver_parcelle_du_point(lat: float, lon: float) -> int | None:
                 polygone, 
                 ST_SetSRID(ST_MakePoint($1, $2), 4326)
             )
+            AND id_utilisateur = $3
             LIMIT 1
-        """, lon, lat)
+        """, lon, lat, user_id)
         return row['id_parcelle'] if row else None
     except Exception as e:
         print(f"Erreur trouver_parcelle_du_point: {e}")
@@ -222,6 +228,9 @@ async def fusionner_zones_proches(id_utilisateur: int):
     finally:
         await conn.close()
 
+# ============================================================
+# ✅ ROUTE PREDICT - CORRIGÉE
+# ============================================================
 @router.post("/predict")
 async def predict(
     image: UploadFile = File(...),
@@ -305,10 +314,13 @@ async def predict(
         id_parcelle=id_parcelle
     )
 
+    # ============================================================
     # 8. Déterminer la parcelle (si non spécifiée par l'utilisateur)
+    # ✅ CORRIGÉ : passage de id_utilisateur
+    # ============================================================
     parcelle_associee = id_parcelle
     if parcelle_associee is None:
-        parcelle_associee = await trouver_parcelle_du_point(latitude, longitude)
+        parcelle_associee = await trouver_parcelle_du_point(latitude, longitude, id_utilisateur)
         if parcelle_associee:
             await obs_repo.update_parcelle(id_observation, parcelle_associee)
             print(f"✅ Observation #{id_observation} associée à la parcelle #{parcelle_associee}")
@@ -322,7 +334,7 @@ async def predict(
     zone_impactee = False
     id_zone = None
 
-    if maladie in ["Non identifiable", "Tomato_healthy"]:
+    if maladie in ["Non identifiable", "Tomato_Healthy"]:
         print(f"⏭️ Observation #{id_observation} ignorée pour les zones ({maladie})")
     else:
         # ✅ Vérifier si la nouvelle observation doit rejoindre une zone existante

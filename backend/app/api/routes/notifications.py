@@ -73,3 +73,18 @@ async def mark_all_notifications_read(user_id: int = 1):
         return {"status": "ok", "message": "Toutes les notifications ont été marquées comme lues"}
     finally:
         await conn.close()
+
+
+@router.get("/notifications/unread/count")
+async def get_unread_count(user_id: int = 1):
+    """Récupère le nombre de notifications non lues"""
+    conn = await asyncpg.connect(settings.DATABASE_URL)
+    try:
+        count = await conn.fetchval("""
+            SELECT COUNT(*) 
+            FROM notification 
+            WHERE id_utilisateur = $1 AND lu = FALSE
+        """, user_id)
+        return {"count": count or 0}
+    finally:
+        await conn.close()

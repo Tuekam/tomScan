@@ -44,9 +44,14 @@ async def get_parcelle(id: int):
 # GET - Statistiques d'une parcelle
 # ============================================================
 @router.get("/parcelles/{id}/stats")
-async def get_parcelle_stats(id: int):
+async def get_parcelle_stats(
+    id: int,
+    user_id: int = Query(1),
+    periode: str = Query("30j", description="7j, 30j, 90j, 365j"),
+    maladie: str | None = Query(None),
+):
     repo = ParcelleRepository()
-    return await repo.calculer_taux_infection(id)
+    return await repo.calculer_taux_infection(id, user_id=user_id, periode=periode, maladie=maladie)
 
 # ============================================================
 # ✅ DELETE CORRIGÉ - user_id en Query (obligatoire)

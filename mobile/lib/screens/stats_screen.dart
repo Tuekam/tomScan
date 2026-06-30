@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
@@ -42,7 +41,6 @@ class _StatsScreenState extends State<StatsScreen> {
     '365j': '1 an',
   };
 
-  // ✅ AJOUT de l'Oïdium
   static const Map<String, Color> _maladieColors = {
     'Mildiou': Color(0xFFEF4444),
     'Alternariose': Color(0xFFF59E0B),
@@ -50,7 +48,7 @@ class _StatsScreenState extends State<StatsScreen> {
     'Septoriose': Color(0xFF6366F1),
     'Moisissure': Color(0xFFEC4899),
     'Sain': Color(0xFF22C55E),
-    'Oïdium': Color(0xFF2196F3), // ← NOUVEAU !
+    'Oïdium': Color(0xFF2196F3),
   };
 
   @override
@@ -222,10 +220,16 @@ class _StatsScreenState extends State<StatsScreen> {
 
       final response = await _dio.get(
         '${AppConfig.baseUrl}/stats/zone/${zone['id_zone']}',
-        queryParameters: {'user_id': userId},
+        queryParameters: {
+          'user_id': userId,
+          'periode': _selectedPeriode,
+          if (_selectedParcelleId != null) 'parcelle_id': _selectedParcelleId,
+          if (_selectedMaladie != null) 'maladie': _selectedMaladie,
+        },
       );
 
-      if (response.statusCode == 200 && mounted) {
+      if (!mounted) return;
+      if (response.statusCode == 200) {
         final detail = response.data;
         if (detail.containsKey('error')) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -238,6 +242,7 @@ class _StatsScreenState extends State<StatsScreen> {
       }
     } catch (e) {
       debugPrint('Erreur chargement détail zone: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
       );
@@ -246,8 +251,16 @@ class _StatsScreenState extends State<StatsScreen> {
 
   Future<void> _showParcelleDetail(Map<String, dynamic> parcelle) async {
     try {
+      final userId = await _getUserId() ?? 1;
       final response = await _dio.get(
-          '${AppConfig.baseUrl}/parcelles/${parcelle['id_parcelle']}/stats');
+        '${AppConfig.baseUrl}/parcelles/${parcelle['id_parcelle']}/stats',
+        queryParameters: {
+          'user_id': userId,
+          'periode': _selectedPeriode,
+          if (_selectedParcelleId != null) 'parcelle_id': _selectedParcelleId,
+          if (_selectedMaladie != null) 'maladie': _selectedMaladie,
+        },
+      );
 
       if (response.statusCode == 200 && mounted) {
         final detail = response.data;
@@ -255,6 +268,7 @@ class _StatsScreenState extends State<StatsScreen> {
       }
     } catch (e) {
       debugPrint('Erreur chargement détail parcelle: $e');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erreur: $e'), backgroundColor: Colors.red),
       );
@@ -263,7 +277,11 @@ class _StatsScreenState extends State<StatsScreen> {
 
   void _showDetailBottomSheet(Map<String, dynamic> detail) {
     final maladies = List<Map<String, dynamic>>.from(detail['maladies'] ?? []);
-    final total = detail['total_observations'] ?? 0;
+
+    // ✅ Utiliser les données correctes
+    final totalObservations = detail['total_observations'] ?? 0;
+    final observationsMalades = detail['observations_malades'] ?? 0;
+    final tauxInfection = detail['taux_infection'] ?? 0;
 
     if (maladies.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -273,15 +291,6 @@ class _StatsScreenState extends State<StatsScreen> {
       );
       return;
     }
-
-    int totalMalades = 0;
-    for (var m in maladies) {
-      if (m['nom'] != 'Sain') {
-        totalMalades += (m['count'] as int? ?? 0);
-      }
-    }
-    final tauxZone =
-        total > 0 ? (totalMalades / total * 100).toStringAsFixed(0) : '0';
 
     showModalBottomSheet(
       context: context,
@@ -295,6 +304,7 @@ class _StatsScreenState extends State<StatsScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Titre
             Row(
               children: [
                 const Icon(Icons.warning_amber_rounded, size: 28),
@@ -309,6 +319,8 @@ class _StatsScreenState extends State<StatsScreen> {
               ],
             ),
             const SizedBox(height: 8),
+
+            // Parcelle
             Row(
               children: [
                 Icon(Icons.location_on, size: 16, color: AppTheme.textMedium),
@@ -318,25 +330,36 @@ class _StatsScreenState extends State<StatsScreen> {
                   style: TextStyle(color: AppTheme.textMedium),
                 ),
                 const Spacer(),
+                // ✅ Taux avec les bonnes données
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: AppTheme.danger.withValues(alpha: 0.1),
+                    color: tauxInfection > 50
+                        ? AppTheme.danger.withValues(alpha: 0.1)
+                        : AppTheme.primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
-                    'Taux: $tauxZone%',
+                    '$observationsMalades / $totalObservations (${tauxInfection.toStringAsFixed(0)}%)',
                     style: TextStyle(
-                        color: AppTheme.danger, fontWeight: FontWeight.w600),
+                      color: tauxInfection > 50
+                          ? AppTheme.danger
+                          : AppTheme.primary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],
             ),
+
             const Divider(height: 32),
+
             const Text('RÉPARTITION PAR MALADIE',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
             const SizedBox(height: 16),
+
             ...maladies.map((m) => Padding(
                   padding: const EdgeInsets.only(bottom: 16),
                   child: Column(
@@ -350,7 +373,7 @@ class _StatsScreenState extends State<StatsScreen> {
                           ),
                           const Spacer(),
                           Text(
-                            '${m['count']} observations (${m['pourcentage']}%)',
+                            '${m['count']} obs (${m['pourcentage']}%)',
                             style: TextStyle(
                                 color: AppTheme.textMedium, fontSize: 13),
                           ),
@@ -360,7 +383,9 @@ class _StatsScreenState extends State<StatsScreen> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
-                          value: (m['count'] as int? ?? 0) / total,
+                          value: totalObservations > 0
+                              ? (m['count'] as int? ?? 0) / totalObservations
+                              : 0,
                           backgroundColor: Colors.grey.shade200,
                           color: _getMaladieColor(m['nom']),
                           minHeight: 6,
@@ -370,6 +395,8 @@ class _StatsScreenState extends State<StatsScreen> {
                   ),
                 )),
             const SizedBox(height: 24),
+
+            // Bouton Voir sur la carte
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -483,7 +510,9 @@ class _StatsScreenState extends State<StatsScreen> {
                         ClipRRect(
                           borderRadius: BorderRadius.circular(4),
                           child: LinearProgressIndicator(
-                            value: (m['count'] as int? ?? 0) / total,
+                            value: total > 0
+                                ? (m['count'] as int? ?? 0) / total
+                                : 0,
                             backgroundColor: Colors.grey.shade200,
                             color: _getMaladieColor(m['maladie_nom'] ?? ''),
                             minHeight: 6,
@@ -536,8 +565,7 @@ class _StatsScreenState extends State<StatsScreen> {
     );
   }
 
-  // ✅ Gestion des 7 classes
-  String _getMaladieDisplayName(String nom) {
+  String _getMaladieDisplayName(String? nom) {
     if (nom == null || nom.isEmpty) return 'Inconnue';
 
     String clean = nom.replaceAll('_', ' ').trim();
@@ -551,7 +579,6 @@ class _StatsScreenState extends State<StatsScreen> {
     if (clean.contains('mold')) return 'Moisissure';
     if (clean.contains('septoria') || clean.contains('spot'))
       return 'Septoriose';
-    // ✅ NOUVEAU
     if (clean.contains('powdery') || clean.contains('mildew')) return 'Oïdium';
 
     if (_maladieColors.containsKey(clean)) return clean;
@@ -559,8 +586,7 @@ class _StatsScreenState extends State<StatsScreen> {
     return clean;
   }
 
-  // ✅ Gestion des 7 classes avec couleurs
-  Color _getMaladieColor(String nom) {
+  Color _getMaladieColor(String? nom) {
     if (nom == null || nom.isEmpty) return Colors.grey;
 
     if (_maladieColors.containsKey(nom)) {
@@ -578,7 +604,6 @@ class _StatsScreenState extends State<StatsScreen> {
       appBar: AppBar(
         title: const Text('Statistiques'),
         actions: [
-          // EXPORT
           IconButton(
             icon: _isExporting
                 ? const SizedBox(
@@ -591,7 +616,6 @@ class _StatsScreenState extends State<StatsScreen> {
             tooltip: 'Exporter les zones en CSV',
             color: AppTheme.primary,
           ),
-          // RAFRAÎCHIR
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadStats,
@@ -625,8 +649,12 @@ class _StatsScreenState extends State<StatsScreen> {
                     children: [
                       Row(
                         children: [
-                          _buildStatCard(Icons.photo_camera, 'Diagnostics',
-                              _stats['total_diagnostics'] ?? 0),
+                          _buildStatCard(
+                              Icons.photo_camera,
+                              'Observations',
+                              _stats['total_observations'] ??
+                                  _stats['total_diagnostics'] ??
+                                  0),
                           const SizedBox(width: 12),
                           _buildStatCard(Icons.warning_amber_rounded, 'Zones',
                               _stats['total_zones'] ?? 0),
@@ -992,16 +1020,27 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   Widget _buildHorizontalBarChartZones() {
-    final maxObs = _topZones.isNotEmpty
-        ? (_topZones.first['nombre_observations'] as num).toDouble()
+    // ✅ Trouver le taux maximum pour l'échelle
+    final maxTaux = _topZones.isNotEmpty
+        ? (_topZones
+            .map((z) => (z['taux_infection'] as num?)?.toDouble() ?? 0)
+            .reduce((a, b) => a > b ? a : b))
         : 1;
 
     return Column(
       children: _topZones.take(5).toList().asMap().entries.map((entry) {
         final index = entry.key + 1;
         final zone = entry.value;
-        final obs = (zone['nombre_observations'] as num).toDouble();
-        final pourcentage = (obs / maxObs * 100).clamp(0, 100);
+
+        // ✅ Utiliser les mêmes données que la modale
+        final totalObservations = zone['total_observations'] ?? 0;
+        final observationsMalades =
+            zone['observations_malades'] ?? zone['nombre_observations'] ?? 0;
+        final tauxInfection = zone['taux_infection'] as num? ?? 0;
+
+        final pourcentage = maxTaux > 0
+            ? ((tauxInfection as double) / maxTaux * 100).clamp(0, 100)
+            : 0;
         final zoneType = zone['parcelle_nom'] ?? 'Hors parcelle';
 
         return GestureDetector(
@@ -1030,7 +1069,7 @@ class _StatsScreenState extends State<StatsScreen> {
                             style: const TextStyle(fontWeight: FontWeight.w500),
                           ),
                           Text(
-                            zoneType,
+                            '$zoneType • $observationsMalades / $totalObservations • ${tauxInfection.toStringAsFixed(0)}%',
                             style: const TextStyle(
                                 fontSize: 11, color: Colors.grey),
                           ),
@@ -1038,9 +1077,12 @@ class _StatsScreenState extends State<StatsScreen> {
                       ),
                     ),
                     Text(
-                      '${obs.toInt()} obs',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w500, color: AppTheme.primary),
+                      '${tauxInfection.toStringAsFixed(0)}%',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          color: (tauxInfection as double) > 50
+                              ? AppTheme.danger
+                              : AppTheme.primary),
                     ),
                   ],
                 ),
@@ -1054,7 +1096,11 @@ class _StatsScreenState extends State<StatsScreen> {
                         child: LinearProgressIndicator(
                           value: pourcentage / 100,
                           backgroundColor: Colors.grey.shade200,
-                          color: AppTheme.primary,
+                          color: (tauxInfection as double) > 50
+                              ? AppTheme.danger
+                              : ((tauxInfection as double) > 20
+                                  ? AppTheme.secondary
+                                  : Colors.green),
                           minHeight: 8,
                         ),
                       ),
@@ -1063,7 +1109,7 @@ class _StatsScreenState extends State<StatsScreen> {
                     SizedBox(
                       width: 45,
                       child: Text(
-                        '${pourcentage.toStringAsFixed(0)}%',
+                        '${tauxInfection.toStringAsFixed(0)}%',
                         style:
                             const TextStyle(fontSize: 12, color: Colors.grey),
                       ),
@@ -1078,6 +1124,9 @@ class _StatsScreenState extends State<StatsScreen> {
     );
   }
 
+  // ============================================================
+  // PARCELLES - AVEC TAUX D'INFECTION RÉEL (inchangé)
+  // ============================================================
   Widget _buildHorizontalBarChartParcelles() {
     final maxTaux = _topParcelles.isNotEmpty
         ? (_topParcelles.first['taux_infection'] as num).toDouble()
