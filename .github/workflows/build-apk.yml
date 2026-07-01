@@ -3,7 +3,7 @@ name: Build TomScan APK
 on:
   push:
     branches: [ master ]
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,20 +16,20 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.0'
+          flutter-version: '3.29.0'  # ← Version récente
           channel: 'stable'
+          cache: true
           
       - name: Install dependencies
+        working-directory: ./mobile
         run: |
-          cd mobile
           flutter pub get
           
       - name: Build APK
-        run: |
-          cd mobile
-          flutter build apk --release
-          
-      - name: Upload APK as artifact
+        working-directory: ./mobile
+        run: flutter build apk --release
+        
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: TomScan-APK
