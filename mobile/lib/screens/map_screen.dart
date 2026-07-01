@@ -86,12 +86,9 @@ class _MapScreenState extends State<MapScreen>
         print(
             '📍 Chargement de la dernière position: ${lastPos.latitude}, ${lastPos.longitude}');
         setState(() {
-          _initialCenter = lastPos;
-          _initialZoom = 16;
           _userPosition = lastPos;
           _userMarker = _buildUserMarker(lastPos);
         });
-        _mapController.move(lastPos, 16);
       }
     });
 
@@ -179,20 +176,10 @@ class _MapScreenState extends State<MapScreen>
       _loadUserParcels(),
     ]);
 
-    await _getUserLocation();
+    // Récupérer la position GPS en arrière-plan
+    await _getUserLocation(centerOnUser: false);
 
-    if (_userPosition != null && mounted) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _mapController.move(_userPosition!, 17);
-        print(
-            '📍 Carte FORCÉE sur position: ${_userPosition!.latitude}, ${_userPosition!.longitude}');
-      });
-    }
-
-    setState(() {
-      _isLoadingData = false;
-    });
-
+    // ✅ CENTRER SUR LE HIGHLIGHT SI PRÉSENT (zone ou diagnostic)
     if (widget.highlightZoneId != null) {
       final zone = _zones.firstWhere(
         (z) => z.id == widget.highlightZoneId,
@@ -209,31 +196,49 @@ class _MapScreenState extends State<MapScreen>
         ),
       );
       if (zone.id != -1) {
-        Future.delayed(const Duration(milliseconds: 600), () {
-          _mapController.move(
-            LatLng(zone.latitude, zone.longitude),
-            18,
-          );
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  '📍 Zone #${zone.id} - ${zone.zoneType == "DANS_PARCELLE" ? "Dans parcelle" : "Hors parcelle"}',
-                ),
-                duration: const Duration(seconds: 3),
-                behavior: SnackBarBehavior.floating,
+        _mapController.move(
+          LatLng(zone.latitude, zone.longitude),
+          18,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '📍 Zone #${zone.id} - ${zone.zoneType == "DANS_PARCELLE" ? "Dans parcelle" : "Hors parcelle"}',
               ),
-            );
-          }
-        });
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     }
+    // ✅ SINON, CENTRER SUR LA POSITION INITIALE SI FOURNIE
+    else if (widget.initialLatitude != null &&
+        widget.initialLongitude != null) {
+      _mapController.move(
+        LatLng(widget.initialLatitude!, widget.initialLongitude!),
+        18,
+      );
+    }
+    // ✅ SINON, CENTRER SUR LA DERNIÈRE POSITION CONNUE
+    else if (_userPosition != null) {
+      _mapController.move(_userPosition!, 16);
+    }
+    // ✅ SINON, CENTRER SUR DOUALA (DEFAULT)
+    else {
+      _mapController.move(_defaultCenter, 13);
+    }
+
+    setState(() {
+      _isLoadingData = false;
+    });
   }
 
   // ============================================================
   // GPS
   // ============================================================
-  Future<void> _getUserLocation() async {
+  Future<void> _getUserLocation({bool centerOnUser = false}) async {
     setState(() => _isLocating = true);
 
     try {
@@ -248,9 +253,6 @@ class _MapScreenState extends State<MapScreen>
                 '📍 Position basée sur la dernière localisation connue';
             _isLocating = false;
           });
-          if (widget.initialLatitude == null && mounted) {
-            _mapController.move(lastPos, 16);
-          }
           return;
         }
 
@@ -274,9 +276,6 @@ class _MapScreenState extends State<MapScreen>
                   '📍 Position basée sur la dernière localisation connue';
               _isLocating = false;
             });
-            if (widget.initialLatitude == null && mounted) {
-              _mapController.move(lastPos, 16);
-            }
             return;
           }
           setState(() {
@@ -297,9 +296,6 @@ class _MapScreenState extends State<MapScreen>
                 '📍 Position basée sur la dernière localisation connue';
             _isLocating = false;
           });
-          if (widget.initialLatitude == null && mounted) {
-            _mapController.move(lastPos, 16);
-          }
           return;
         }
         setState(() {
@@ -332,13 +328,12 @@ class _MapScreenState extends State<MapScreen>
         _initialZoom = 17;
       });
 
-      if (mounted) {
+      // ✅ Centrer UNIQUEMENT si demandé (clic sur le bouton 📍)
+      if (centerOnUser && mounted) {
         _mapController.move(userLatLng, 17);
         print(
             '📍 Carte centrée sur position GPS: ${position.latitude}, ${position.longitude}');
-      }
 
-      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -361,9 +356,6 @@ class _MapScreenState extends State<MapScreen>
               '📍 Position basée sur la dernière localisation connue';
           _isLocating = false;
         });
-        if (widget.initialLatitude == null && mounted) {
-          _mapController.move(lastPos, 16);
-        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -683,10 +675,11 @@ class _MapScreenState extends State<MapScreen>
   }
 
   // ============================================================
-  // CENTRAGE SUR L'UTILISATEUR
+  // CENTRAGE SUR L'UTILISATEUR (UNIQUEMENT AU CLIC)
   // ============================================================
   Future<void> _centerOnUser() async {
-    if (_userPosition != null) {
+    await _getUserLocation(centerOnUser: true);
+    if (_userPosition != null && mounted) {
       _mapController.move(_userPosition!, 17);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -696,18 +689,13 @@ class _MapScreenState extends State<MapScreen>
         ),
       );
     } else {
-      await _getUserLocation();
-      if (_userPosition != null && mounted) {
-        _mapController.move(_userPosition!, 17);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Impossible d\'obtenir votre position'),
-            backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impossible d\'obtenir votre position'),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -955,7 +943,7 @@ class _MapScreenState extends State<MapScreen>
   }
 
   // ============================================================
-  // ✅ SUPPRESSION ZONE - NOUVEAU
+  // SUPPRESSION ZONE
   // ============================================================
   Future<void> _deleteZone(
       int idZone, int observations, String zoneType) async {
@@ -1007,7 +995,6 @@ class _MapScreenState extends State<MapScreen>
         queryParameters: {'user_id': userId},
       );
 
-      // Recharger les zones
       await _loadZones();
 
       if (mounted) {
@@ -1033,7 +1020,7 @@ class _MapScreenState extends State<MapScreen>
   }
 
   // ============================================================
-  // AFFICHAGE DES DÉTAILS D'UNE ZONE - AVEC BOUTON SUPPRIMER
+  // AFFICHAGE DES DÉTAILS D'UNE ZONE
   // ============================================================
   void _showZoneDetails(ZoneData zone) {
     String titre = 'Zone #${zone.id}';
@@ -1087,7 +1074,6 @@ class _MapScreenState extends State<MapScreen>
               const SizedBox(height: 16),
               Row(
                 children: [
-                  // Bouton Centrer
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () {
@@ -1103,7 +1089,6 @@ class _MapScreenState extends State<MapScreen>
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // ✅ Bouton Supprimer
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
@@ -1204,19 +1189,17 @@ class _MapScreenState extends State<MapScreen>
               onPressed: _centerOnUser,
               color: AppTheme.primary),
           IconButton(
-            icon: Icon(_isSatellite ? Icons.map : Icons.satellite),
-            onPressed: () => setState(() => _isSatellite = !_isSatellite),
-            color: AppTheme.primary,
-          ),
+              icon: Icon(_isSatellite ? Icons.map : Icons.satellite),
+              onPressed: () => setState(() => _isSatellite = !_isSatellite),
+              color: AppTheme.primary),
           IconButton(
               icon: const Icon(Icons.info_outline),
               onPressed: _showLegendDialog,
               color: AppTheme.primary),
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-            color: AppTheme.primary,
-          ),
+              icon: const Icon(Icons.refresh),
+              onPressed: _loadData,
+              color: AppTheme.primary),
         ],
       ),
       body: Stack(
@@ -1238,6 +1221,8 @@ class _MapScreenState extends State<MapScreen>
                     ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
                     : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.tomscan.app',
+                maxZoom: 18,
+                minZoom: 8,
               ),
               PolygonLayer(polygons: polygons),
               MarkerLayer(markers: [...allMarkers, ...drawingMarkers]),
@@ -1521,6 +1506,37 @@ class _MapScreenState extends State<MapScreen>
               ),
             ),
           ),
+          if (_zones.isNotEmpty && !_isLoadingData)
+            Positioned(
+              top: 70,
+              left: 16,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_zones.length} zones',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

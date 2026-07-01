@@ -12,7 +12,7 @@ class Settings:
     YOLO_MODEL_PATH: str = os.getenv("YOLO_MODEL_PATH", "ml/yolo_plante_tomate.pt")
     
     # Seuils IA - OPTIMISÉS
-    SEUIL_CONFIANCE_YOLO: float = float(os.getenv("SEUIL_CONFIANCE_YOLO", "0.9"))    # ← Filtre de présence
+    SEUIL_CONFIANCE_YOLO: float = float(os.getenv("SEUIL_CONFIANCE_YOLO", "0.15"))    # ← Filtre de présence
     SEUIL_CONFIANCE_RESNET: float = float(os.getenv("SEUIL_CONFIANCE_RESNET", "0.5")) # ← Classification
     
     # Règles métier

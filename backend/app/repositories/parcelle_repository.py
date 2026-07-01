@@ -1,4 +1,3 @@
-# backend/app/repositories/parcelle_repository.py
 import asyncpg
 import json
 from datetime import datetime, timedelta
@@ -14,7 +13,6 @@ class ParcelleRepository:
                 raise ValueError("Une parcelle doit avoir au moins 3 points")
             
             polygon_points = list(points)
-            # Fermer le polygone
             if (abs(polygon_points[0][0] - polygon_points[-1][0]) > 0.000001 or
                 abs(polygon_points[0][1] - polygon_points[-1][1]) > 0.000001):
                 polygon_points.append(polygon_points[0])
@@ -25,7 +23,6 @@ class ParcelleRepository:
                 wkt_points.append(f"{lon} {lat}")
             wkt = f"POLYGON(({', '.join(wkt_points)}))"
             
-            # Insérer et récupérer l'ID
             row = await conn.fetchrow("""
                 INSERT INTO parcelle (id_utilisateur, nom, polygone, date_creation)
                 VALUES ($1, $2, ST_GeomFromText($3, 4326), NOW())
@@ -33,7 +30,6 @@ class ParcelleRepository:
             """, id_utilisateur, nom, wkt)
             id_parcelle = row['id_parcelle']
             
-            # Associer les observations existantes dans ce polygone
             await conn.execute("""
                 UPDATE observation
                 SET id_parcelle = $1
@@ -44,7 +40,6 @@ class ParcelleRepository:
                 AND id_parcelle IS NULL
             """, id_parcelle, wkt)
             
-            # Associer les zones infectées existantes dans ce polygone
             await conn.execute("""
                 UPDATE zone_infectee
                 SET id_parcelle = $1, zone_type = 'DANS_PARCELLE'
@@ -61,27 +56,20 @@ class ParcelleRepository:
     
     
     async def verifier_chevauchement(self, id_utilisateur: int, points: list) -> bool:
-        """Vérifie si la nouvelle parcelle chevauche une parcelle existante (dans la même zone géographique)"""
+        """Vérifie si la nouvelle parcelle chevauche une parcelle existante"""
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            # 1. Construire le polygone temporaire avec fermeture automatique
             polygon_points = list(points)
-            # Fermer le polygone si le premier point != dernier point
             if (abs(polygon_points[0][0] - polygon_points[-1][0]) > 0.000001 or
                 abs(polygon_points[0][1] - polygon_points[-1][1]) > 0.000001):
                 polygon_points.append(polygon_points[0])
             
-            # 2. Convertir en WKT : (longitude latitude)
             wkt_points = []
             for p in polygon_points:
-                lat, lon = p[0], p[1]  # points sont (lat, lon)
+                lat, lon = p[0], p[1]
                 wkt_points.append(f"{lon} {lat}")
             wkt = f"POLYGON(({', '.join(wkt_points)}))"
             
-            # DEBUG (à retirer après test)
-            print(f"DEBUG chevauchement - WKT: {wkt}")
-            
-            # 3. Vérifier l'intersection avec les parcelles existantes
             row = await conn.fetchrow("""
                 SELECT COUNT(*) FROM parcelle
                 WHERE id_utilisateur = $1
@@ -95,11 +83,8 @@ class ParcelleRepository:
     async def supprimer_parcelle(self, id_parcelle: int) -> bool:
         conn = await asyncpg.connect(settings.DATABASE_URL)
         try:
-            # Dissocier les zones
             await conn.execute("UPDATE zone_infectee SET id_parcelle = NULL, zone_type = 'HORS_PARCELLE' WHERE id_parcelle = $1", id_parcelle)
-            # Dissocier les observations
             await conn.execute("UPDATE observation SET id_parcelle = NULL WHERE id_parcelle = $1", id_parcelle)
-            # Supprimer la parcelle
             result = await conn.execute("DELETE FROM parcelle WHERE id_parcelle = $1", id_parcelle)
             return int(result.split()[-1]) > 0
         finally:
@@ -114,7 +99,7 @@ class ParcelleRepository:
                     id_parcelle,
                     nom,
                     ST_AsGeoJSON(polygone) as geojson,
-                    ST_Area(ST_Transform(polygone, 3857)) as surface_m2,
+                    ST_Area(polygone::geography) as surface_m2,
                     date_creation
                 FROM parcelle
                 WHERE id_utilisateur = $1
@@ -160,7 +145,7 @@ class ParcelleRepository:
                     id_utilisateur,
                     nom,
                     ST_AsGeoJSON(polygone) as geojson,
-                    ST_Area(ST_Transform(polygone, 3857)) as surface_m2,
+                    ST_Area(polygone::geography) as surface_m2,
                     date_creation
                 FROM parcelle
                 WHERE id_parcelle = $1
@@ -173,7 +158,7 @@ class ParcelleRepository:
                 if geojson_str:
                     geojson = json.loads(geojson_str)
                     coordinates = geojson.get('coordinates', [])
-                    if coordinates and len(coordinates) > 0:
+                    if coordinates and (len(coordinates) > 0):
                         points = []
                         for coord in coordinates[0]:
                             points.append([coord[1], coord[0]])
