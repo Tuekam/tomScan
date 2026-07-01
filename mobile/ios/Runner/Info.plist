@@ -26,6 +26,64 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	
+	<!-- ============================================================ -->
+	<!-- 🔐 PERMISSIONS POUR iOS -->
+	<!-- ============================================================ -->
+	
+	<!-- Permission CAMÉRA -->
+	<key>NSCameraUsageDescription</key>
+	<string>TomScan utilise la caméra pour analyser les feuilles de tomate</string>
+	
+	<!-- Permission LOCALISATION -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>TomScan utilise votre position pour localiser les zones infectées sur la carte</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>TomScan utilise votre position pour localiser les zones infectées sur la carte</string>
+	
+	<!-- Permission PHOTOS (galerie) -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>TomScan utilise votre galerie pour importer des photos de feuilles de tomate</string>
+	
+	<!-- Permission NOTIFICATIONS -->
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>TomScan vous envoie des notifications pour les alertes de zones infectées</string>
+	
+	<!-- Permission MICROPHONE (si utilisé) -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>TomScan utilise le microphone pour la reconnaissance vocale</string>
+	
+	<!-- ============================================================ -->
+	<!-- 🔐 SÉCURITÉ RÉSEAU (HTTP pour développement) -->
+	<!-- ============================================================ -->
+	
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>192.168.0.176</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	
+	<!-- ============================================================ -->
+	<!-- 🎨 CONFIGURATIONS DE L'APPLICATION -->
+	<!-- ============================================================ -->
+	
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
