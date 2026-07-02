@@ -562,7 +562,6 @@ class _MapScreenState extends State<MapScreen>
         color: Colors.red.withValues(alpha: 0.15),
         borderColor: Colors.red,
         borderStrokeWidth: 2,
-        isDotted: true,
       ),
     );
 
@@ -1165,7 +1164,6 @@ class _MapScreenState extends State<MapScreen>
           color: Colors.red.withValues(alpha: 0.2),
           borderColor: Colors.red,
           borderStrokeWidth: 2.5,
-          isDotted: true,
         ),
     ];
 
