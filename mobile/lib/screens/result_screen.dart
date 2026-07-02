@@ -419,18 +419,9 @@ class ResultScreen extends StatelessWidget {
             const SizedBox(height: 24),
 
             // ---------- Boutons ----------
-            ElevatedButton.icon(
-              onPressed: () => _navigateToMap(context),
-              icon: const Icon(Icons.map),
-              label: const Text('Voir sur la carte'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-            const SizedBox(height: 12),
+            // ✅ SUPPRIMER LE BOUTON "Voir sur la carte"
+            // Les observations ne sont pas affichées sur la carte
+
             OutlinedButton.icon(
               onPressed: () {
                 Navigator.pop(context, {
@@ -441,7 +432,7 @@ class ResultScreen extends StatelessWidget {
                 });
               },
               icon: const Icon(Icons.chat_bubble_outline),
-              label: const Text('Poser une question'),
+              label: const Text('Poser une question à TomScan AI'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppTheme.primary,
                 side: const BorderSide(color: AppTheme.primaryLight),
@@ -461,18 +452,5 @@ class ResultScreen extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  void _navigateToMap(BuildContext context) async {
-    final userId = await AuthService().getUserId();
-    Navigator.pop(context, {
-      'action': 'view_on_map',
-      'latitude': latitude,
-      'longitude': longitude,
-      'id_diagnostic': idDiagnostic,
-      'maladie': maladie,
-      'confiance': confiance,
-      'user_id': userId ?? 1,
-    });
   }
 }

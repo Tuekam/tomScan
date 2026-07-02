@@ -65,6 +65,9 @@ class _MapScreenState extends State<MapScreen>
 
   static const String _lastPositionKey = 'last_gps_position';
 
+  // ✅ AJOUT : Contrôle l'affichage du marqueur utilisateur
+  bool _showUserMarker = true;
+
   @override
   void initState() {
     super.initState();
@@ -169,6 +172,7 @@ class _MapScreenState extends State<MapScreen>
     setState(() {
       _isLoadingData = true;
       _errorMessage = null;
+      _showUserMarker = true; // ✅ Réinitialiser
     });
 
     await Future.wait([
@@ -181,6 +185,11 @@ class _MapScreenState extends State<MapScreen>
 
     // ✅ CENTRER SUR LE HIGHLIGHT SI PRÉSENT (zone ou diagnostic)
     if (widget.highlightZoneId != null) {
+      // ✅ Cacher le marqueur utilisateur quand on est sur une zone highlight
+      setState(() {
+        _showUserMarker = false;
+      });
+
       final zone = _zones.firstWhere(
         (z) => z.id == widget.highlightZoneId,
         orElse: () => ZoneData(
@@ -216,6 +225,9 @@ class _MapScreenState extends State<MapScreen>
     // ✅ SINON, CENTRER SUR LA POSITION INITIALE SI FOURNIE
     else if (widget.initialLatitude != null &&
         widget.initialLongitude != null) {
+      setState(() {
+        _showUserMarker = true;
+      });
       _mapController.move(
         LatLng(widget.initialLatitude!, widget.initialLongitude!),
         18,
@@ -223,10 +235,16 @@ class _MapScreenState extends State<MapScreen>
     }
     // ✅ SINON, CENTRER SUR LA DERNIÈRE POSITION CONNUE
     else if (_userPosition != null) {
+      setState(() {
+        _showUserMarker = true;
+      });
       _mapController.move(_userPosition!, 16);
     }
     // ✅ SINON, CENTRER SUR DOUALA (DEFAULT)
     else {
+      setState(() {
+        _showUserMarker = true;
+      });
       _mapController.move(_defaultCenter, 13);
     }
 
@@ -326,6 +344,7 @@ class _MapScreenState extends State<MapScreen>
         _isLocating = false;
         _initialCenter = userLatLng;
         _initialZoom = 17;
+        _showUserMarker = true;
       });
 
       // ✅ Centrer UNIQUEMENT si demandé (clic sur le bouton 📍)
@@ -355,6 +374,7 @@ class _MapScreenState extends State<MapScreen>
           _errorMessage =
               '📍 Position basée sur la dernière localisation connue';
           _isLocating = false;
+          _showUserMarker = true;
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -678,6 +698,10 @@ class _MapScreenState extends State<MapScreen>
   // CENTRAGE SUR L'UTILISATEUR (UNIQUEMENT AU CLIC)
   // ============================================================
   Future<void> _centerOnUser() async {
+    // ✅ Réafficher le marqueur utilisateur quand on clique sur le bouton
+    setState(() {
+      _showUserMarker = true;
+    });
     await _getUserLocation(centerOnUser: true);
     if (_userPosition != null && mounted) {
       _mapController.move(_userPosition!, 17);
@@ -1125,9 +1149,10 @@ class _MapScreenState extends State<MapScreen>
   // ============================================================
   @override
   Widget build(BuildContext context) {
+    // ✅ Marqueurs avec condition d'affichage du marqueur utilisateur
     final allMarkers = <Marker>[
       ..._zoneMarkers,
-      if (_userMarker != null) _userMarker!,
+      if (_userMarker != null && _showUserMarker) _userMarker!,
       ..._parcelMarkers,
     ];
     if (_highlightMarker != null) allMarkers.add(_highlightMarker!);
@@ -1535,6 +1560,29 @@ class _MapScreenState extends State<MapScreen>
                     ),
                   ],
                 ),
+              ),
+            ),
+          // ✅ Bouton pour réafficher le marqueur utilisateur (quand caché)
+          if (!_showUserMarker && _userPosition != null)
+            Positioned(
+              bottom: 80,
+              left: 16,
+              child: FloatingActionButton.small(
+                onPressed: () {
+                  setState(() {
+                    _showUserMarker = true;
+                  });
+                  _mapController.move(_userPosition!, 16);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('📍 Affichage de votre position'),
+                      duration: Duration(seconds: 2),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+                child: const Icon(Icons.gps_fixed, size: 20),
+                backgroundColor: AppTheme.primary,
               ),
             ),
         ],

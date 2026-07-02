@@ -1,4 +1,3 @@
-// screens/camera_screen.dart
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -49,7 +48,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   int _currentUserId = 0;
 
-  // ✅ Nombre de notifications non lues
+  // Nombre de notifications non lues
   int _unreadCount = 0;
 
   @override
@@ -68,7 +67,7 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   // ============================================================
-  // ✅ CHARGER LE NOMBRE DE NOTIFICATIONS NON LUES
+  // CHARGER LE NOMBRE DE NOTIFICATIONS NON LUES
   // ============================================================
   Future<void> _loadUnreadCount() async {
     try {
@@ -87,7 +86,7 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  // ✅ OUVRIR LES NOTIFICATIONS ET METTRE À JOUR LE BADGE
+  // OUVRIR LES NOTIFICATIONS ET METTRE À JOUR LE BADGE
   Future<void> _openNotifications() async {
     await Navigator.push(
       context,
@@ -95,7 +94,6 @@ class _CameraScreenState extends State<CameraScreen> {
         builder: (context) => const NotificationsScreen(),
       ),
     );
-    // Recharger le compteur après fermeture
     await _loadUnreadCount();
   }
 
@@ -350,20 +348,8 @@ class _CameraScreenState extends State<CameraScreen> {
       );
 
       if (result != null && mounted) {
-        if (result['action'] == 'view_on_map') {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => MapScreen(
-                initialLatitude: result['latitude'],
-                initialLongitude: result['longitude'],
-                highlightDiagnosticId: result['id_diagnostic'],
-                highlightMaladie: result['maladie'],
-                highlightConfiance: result['confiance'],
-              ),
-            ),
-          );
-        } else if (result['action'] == 'ask_chatbot') {
+        // ✅ Seul le chatbot reste (le bouton "Voir sur la carte" a été supprimé de ResultScreen)
+        if (result['action'] == 'ask_chatbot') {
           final question = result['question'] ?? '';
           Navigator.push(
             context,
@@ -391,6 +377,9 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  // ============================================================
+  // DERNIER DIAGNOSTIC - MODIFIÉ
+  // ============================================================
   void _openLastDiagnostic() async {
     if (_lastDiagnosticData == null) return;
 
@@ -416,20 +405,9 @@ class _CameraScreenState extends State<CameraScreen> {
     );
 
     if (result != null && mounted) {
-      if (result['action'] == 'view_on_map') {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => MapScreen(
-              initialLatitude: result['latitude'],
-              initialLongitude: result['longitude'],
-              highlightDiagnosticId: result['id_diagnostic'],
-              highlightMaladie: result['maladie'],
-              highlightConfiance: result['confiance'],
-            ),
-          ),
-        );
-      } else if (result['action'] == 'ask_chatbot') {
+      // ✅ Suppression de la navigation "view_on_map"
+      // ✅ Seul le chatbot reste
+      if (result['action'] == 'ask_chatbot') {
         final question = result['question'] ?? '';
         Navigator.push(
           context,
@@ -479,7 +457,7 @@ class _CameraScreenState extends State<CameraScreen> {
         elevation: 0,
         automaticallyImplyLeading: false,
         actions: [
-          // ✅ BOUTON NOTIFICATIONS AVEC BADGE
+          // BOUTON NOTIFICATIONS AVEC BADGE
           Stack(
             children: [
               IconButton(
