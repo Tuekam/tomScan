@@ -25,7 +25,7 @@ opencv-python-headless==4.13.0.92
 numpy==2.4.4
 
 # IA
-torch==2.6.0+cpu
+torch==2.12.1
 torchvision==0.21.0+cpu
 ultralytics==8.4.61
 
